@@ -1,0 +1,19 @@
+# Environment variables
+.env
+.env.*
+
+# Docker
+db_data/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files (optional but recommended)
+.vscode/
+.idea/
+
+# Dependency folders (future proofing)
+vendor/
+node_modules/
