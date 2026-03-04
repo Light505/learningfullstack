@@ -8,8 +8,8 @@
 # =========================
 # Docker
 # =========================
-docker-compose.override.yml
-docker-compose.dev.yml
+# Note: docker-compose.override.yml is auto-loaded by docker compose
+# and should be version-controlled for dev environments
 
 # =========================
 # Logs
@@ -54,4 +54,3 @@ __tests__/
 # =========================
 # OTHERS
 # =========================
-AGENTS.md

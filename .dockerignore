@@ -2,11 +2,10 @@
 .git
 .gitignore
 
-# Docker
+# Docker Compose (not needed in build context)
 docker-compose*.yml
-Dockerfile
 
-# Environment
+# Environment files (secrets should not be in image)
 .env
 .env.*
 
@@ -29,6 +28,8 @@ Thumbs.db
 coverage/
 __tests__/
 
-# Docs
+# Documentation
 README.md
 AGENTS.md
+DOCUMENTATION.md
+TODO.md
