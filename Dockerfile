@@ -1,11 +1,8 @@
-FROM php:8.2-apache-bookworm-slim
+FROM php:apache-bookworm
 
 # Install required PHP extensions
-RUN apt-get update \
-    && docker-php-ext-install pdo_mysql \
-    && a2enmod rewrite \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+RUN docker-php-ext-install -j"$(nproc)" pdo_mysql \
+    && a2enmod rewrite
 
 WORKDIR /var/www/html
 
