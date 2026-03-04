@@ -1,22 +1,52 @@
-# Environment variables
+# =========================
+# Environment Variables (CRITICAL)
+# =========================
 .env
 .env.*
+!.env.example
 
+# =========================
 # Docker
-db_data/
-*.log
+# =========================
+docker-compose.override.yml
+docker-compose.dev.yml
 
-# OS files
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+apache.log
+php_errors.log
+
+# =========================
+# OS Files
+# =========================
 .DS_Store
 Thumbs.db
 
-# IDE files (optional but recommended)
+# =========================
+# IDE / Editor
+# =========================
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Dependency folders (future proofing)
-vendor/
+# =========================
+# Dependency Folders (if added later)
+# =========================
 node_modules/
+vendor/
 
-# Dev environment
-dev/
+# =========================
+# Test / Coverage
+# =========================
+coverage/
+__tests__/
+
+# =========================
+# Temporary Files
+# =========================
+*.tmp
+*.bak
