@@ -17,3 +17,6 @@ Thumbs.db
 # Dependency folders (future proofing)
 vendor/
 node_modules/
+
+# Dev environment
+dev/
