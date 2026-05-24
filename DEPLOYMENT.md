@@ -38,7 +38,7 @@ MYSQL_PASSWORD=replace_with_strong_app_password
 Start the services:
 
 ```bash
-docker compose -f docker-compose.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d --build
 ```
 
 Initialize the database once:
@@ -121,11 +121,23 @@ The workflow SSHes into the VPS and runs:
 cd /opt/learningfullstack
 git fetch origin main
 git reset --hard origin/main
-docker compose -f docker-compose.yml up -d --build
-docker compose -f docker-compose.yml ps
+docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.admin.yml ps
 ```
 
-The `-f docker-compose.yml` flag is intentional. It prevents Docker Compose from automatically loading `docker-compose.override.yml`, which is for development and exposes phpMyAdmin.
+The explicit `-f` flags are intentional. They prevent Docker Compose from automatically loading `docker-compose.override.yml`, which is for development, while still starting phpMyAdmin from `docker-compose.admin.yml`.
+
+phpMyAdmin is bound to `127.0.0.1:8081`, so it is only reachable from the VPS itself. Access it from your machine with an SSH tunnel:
+
+```powershell
+ssh -i .\learningfullstack_actions_key -p 2202 -L 8081:127.0.0.1:8081 lighthal@micko.lol
+```
+
+Then open:
+
+```text
+http://localhost:8081
+```
 
 ## 6. Manual deploy fallback
 
@@ -135,6 +147,6 @@ If GitHub Actions is unavailable, deploy manually from the VPS:
 cd /opt/learningfullstack
 git fetch origin main
 git reset --hard origin/main
-docker compose -f docker-compose.yml up -d --build
-docker compose -f docker-compose.yml ps
+docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.admin.yml ps
 ```

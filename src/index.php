@@ -361,7 +361,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     <section class="hero">
         <div class="container">
-            <h1>Welcome to Your Business</h1>
+            <h1>Welcome to Lighthal HomePage</h1>
             <p>Fast, reliable service. Quality you can trust.</p>
             <div class="cta-buttons">
                 <button class="btn btn-primary" onclick="document.getElementById('inquiry').scrollIntoView({behavior: 'smooth'})">Send Inquiry</button>
