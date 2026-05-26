@@ -1,5 +1,7 @@
 services:
   web:
+    build: .
+    image: learningfullstack-web:local
     ports:
       - "8080:80"
     volumes:

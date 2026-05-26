@@ -1,9 +1,13 @@
 # Git
 .git
 .gitignore
+.github/
 
 # Docker Compose (not needed in build context)
 docker-compose*.yml
+
+# Database migration files are deployed separately
+database/
 
 # Environment files (secrets should not be in image)
 .env
@@ -29,7 +33,4 @@ coverage/
 __tests__/
 
 # Documentation
-README.md
-AGENTS.md
-DOCUMENTATION.md
-TODO.md
+*.md

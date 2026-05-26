@@ -1,26 +1,57 @@
-# VPS Deployment With GitHub Actions
+# VPS Deployment With Watchtower
 
-This project deploys from the `main` branch. Keep active development on `dev`, then merge `dev` into `main` when you want production to update.
+This phase keeps deployment simple:
 
-## 1. Prepare the VPS once
+1. Work on `dev`.
+2. Merge tested work into `main`.
+3. Manually build and push the web image from `main`.
+4. Watchtower on the VPS detects the new image digest.
+5. Watchtower pulls the image and restarts only the web container.
 
-Install Docker Engine and Docker Compose on the VPS before continuing.
+This is simpler than Swarm rolling deployments, but it has a tradeoff: the web
+container restarts in place, so a brief interruption is possible. Later, when
+the project needs real multi-replica rollouts, move back to Swarm, Kubernetes,
+or another orchestrator.
 
-Create an app directory:
+## Image Tags
+
+Use predictable tags in GitHub Container Registry:
+
+```text
+sha-<short-commit-sha>  immutable image for one exact main commit
+main                    moving tag for the latest main image you pushed
+prod                    moving tag watched by the VPS
+test                    temporary test image
+```
+
+Production should normally run:
+
+```env
+WEB_IMAGE=ghcr.io/light505/learningfullstack:prod
+```
+
+## 1. Prepare The VPS Once
+
+Install Docker Engine and Docker Compose on the VPS.
+
+Create the app directory:
 
 ```bash
 sudo mkdir -p /opt/learningfullstack
 sudo chown "$USER:$USER" /opt/learningfullstack
-```
-
-Clone the production branch:
-
-```bash
-git clone -b main <your-repo-url> /opt/learningfullstack
 cd /opt/learningfullstack
 ```
 
-Create the production environment file:
+Copy these files to `/opt/learningfullstack`:
+
+```text
+docker-compose.yml
+docker-compose.traefik.yml
+docker-compose.watchtower.yml
+database/init.sql
+```
+
+Create the production `.env`:
 
 ```bash
 nano .env
@@ -29,16 +60,22 @@ nano .env
 Use strong production values:
 
 ```env
+WEB_IMAGE=ghcr.io/light505/learningfullstack:prod
+APP_DOMAIN=example.com
+TRAEFIK_ACME_EMAIL=admin@example.com
 MYSQL_ROOT_PASSWORD=replace_with_strong_root_password
 MYSQL_DATABASE=mydb
 MYSQL_USER=app_user
 MYSQL_PASSWORD=replace_with_strong_app_password
+GHCR_USERNAME=Light505
+GHCR_TOKEN=github_token_with_package_read_access
+WATCHTOWER_POLL_INTERVAL=300
 ```
 
-Start the services:
+Start production:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f docker-compose.watchtower.yml up -d
 ```
 
 Initialize the database once:
@@ -52,48 +89,9 @@ docker compose -f docker-compose.yml exec -T db mysql -uroot -p"$MYSQL_ROOT_PASS
 
 Do not run the database initialization command on every deploy.
 
-## 2. Create a deploy SSH key
+## 2. Development Flow
 
-On your local machine, create a key dedicated to GitHub Actions deployment:
-
-```bash
-ssh-keygen -t ed25519 -C "github-actions-learningfullstack-deploy" -f ./learningfullstack_deploy_key
-```
-
-Copy the public key to the VPS deploy user:
-
-```bash
-ssh-copy-id -i ./learningfullstack_deploy_key.pub <vps-user>@<vps-host>
-```
-
-Test SSH access:
-
-```bash
-ssh -i ./learningfullstack_deploy_key <vps-user>@<vps-host>
-```
-
-## 3. Add GitHub repository secrets
-
-In GitHub, open:
-
-```text
-Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
-```
-
-Create these secrets:
-
-```text
-VPS_HOST       VPS IP address or domain
-VPS_USER       VPS SSH username
-VPS_SSH_KEY    contents of ./learningfullstack_deploy_key
-VPS_SSH_PORT   SSH port, usually 22
-```
-
-`VPS_SSH_KEY` must contain the private key, including the begin and end lines.
-
-## 4. Development flow
-
-Work on `dev` locally:
+Work on `dev`:
 
 ```bash
 git checkout dev
@@ -111,42 +109,73 @@ git merge dev
 git push origin main
 ```
 
-Pushing to `main` triggers `.github/workflows/deploy.yml`.
+## 3. Publish The Web Image Manually
 
-## 5. What the workflow does
+Build and push from a clean `main` branch.
 
-The workflow SSHes into the VPS and runs:
+Bash:
 
 ```bash
-cd /opt/learningfullstack
-git fetch origin main
-git reset --hard origin/main
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml ps
+git checkout main
+git pull origin main
+SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+IMAGE="ghcr.io/light505/learningfullstack"
+
+docker build -t "$IMAGE:sha-$SHORT_SHA" -t "$IMAGE:main" -t "$IMAGE:prod" .
+docker push "$IMAGE:sha-$SHORT_SHA"
+docker push "$IMAGE:main"
+docker push "$IMAGE:prod"
 ```
 
-The explicit `-f` flags are intentional. They prevent Docker Compose from automatically loading `docker-compose.override.yml`, which is for development. phpMyAdmin is included in the base stack and bound to `127.0.0.1:8081`.
-
-phpMyAdmin is bound to `127.0.0.1:8081`, so it is only reachable from the VPS itself. Access it from your machine with an SSH tunnel:
+PowerShell:
 
 ```powershell
-ssh -i .\learningfullstack_actions_key -p 2202 -L 8081:127.0.0.1:8081 lighthal@micko.lol
+git checkout main
+git pull origin main
+$SHORT_SHA = git rev-parse --short=12 HEAD
+$IMAGE = "ghcr.io/light505/learningfullstack"
+
+docker build -t "$IMAGE`:sha-$SHORT_SHA" -t "$IMAGE`:main" -t "$IMAGE`:prod" .
+docker push "$IMAGE`:sha-$SHORT_SHA"
+docker push "$IMAGE`:main"
+docker push "$IMAGE`:prod"
+```
+
+Watchtower will check the registry on its poll interval. When the `prod` tag
+points to a new digest, it pulls the image and restarts the `web` container.
+
+## 4. Check Deployment
+
+On the VPS:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f docker-compose.watchtower.yml ps
+docker logs watchtower --tail 100
+docker logs web --tail 100
+```
+
+To force a one-time Watchtower check:
+
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e REPO_USER="$GHCR_USERNAME" \
+  -e REPO_PASS="$GHCR_TOKEN" \
+  containrrr/watchtower:latest \
+  --run-once --label-enable
+```
+
+## 5. phpMyAdmin Access
+
+phpMyAdmin is bound to `127.0.0.1:8081`, so it is only reachable from the VPS
+itself. Access it from your machine with an SSH tunnel:
+
+```powershell
+ssh -L 8081:127.0.0.1:8081 <vps-user>@<vps-host>
 ```
 
 Then open:
 
 ```text
 http://localhost:8081
-```
-
-## 6. Manual deploy fallback
-
-If GitHub Actions is unavailable, deploy manually from the VPS:
-
-```bash
-cd /opt/learningfullstack
-git fetch origin main
-git reset --hard origin/main
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml ps
 ```

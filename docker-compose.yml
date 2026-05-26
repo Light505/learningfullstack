@@ -1,7 +1,9 @@
 services:
   web:
-    build: .
+    image: ${WEB_IMAGE:-learningfullstack-web:local}
     container_name: web
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     environment:
       DB_HOST: db
       DB_NAME: ${MYSQL_DATABASE}

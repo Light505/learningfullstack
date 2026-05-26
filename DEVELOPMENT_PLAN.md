@@ -8,7 +8,7 @@ This plan keeps the project moving one clear step at a time. Work happens on
 - PHP/Apache web app runs in Docker.
 - MySQL runs in Docker on the same host.
 - Traefik can terminate HTTPS and route traffic to the web container.
-- GitHub Actions deploys `main` to the VPS.
+- Production updates are handled by Watchtower polling the pushed web image.
 - Local development should use Docker Compose with the development override.
 
 ## Phase 1: Local Development Confidence
@@ -37,17 +37,40 @@ Verified on 2026-05-27:
 ## Phase 2: Production Docker Cleanup
 
 Goal: keep the production image small, predictable, and separate from local-only
-settings.
+settings. During this phase, MySQL still runs on the same VPS; only the web app
+changes from "build on server" to "pull and run a prebuilt image."
 
-- [ ] Keep `.dockerignore` updated so secrets, Git files, docs, and local files
+- [x] Keep `.dockerignore` updated so secrets, Git files, docs, and local files
       are not sent into the image build context.
-- [ ] Keep production Compose files explicit with `-f` flags.
-- [ ] Confirm production deploy does not load `docker-compose.override.yml`.
-- [ ] Review whether `php:apache-bookworm` should remain the base image.
-- [ ] Only consider Alpine if required PHP extensions and Apache behavior remain
+- [x] Keep local builds in `docker-compose.override.yml`.
+- [x] Run production from `WEB_IMAGE` instead of `build: .`.
+- [x] Build and push the web image manually from `main`.
+- [x] Use image tags for production updates (`sha-*`, `main`, `prod`).
+- [x] Deploy only Compose/runtime files to the VPS.
+- [x] Add Watchtower for automatic web image updates.
+- [x] Keep production Compose files explicit with `-f` flags.
+- [x] Confirm production deploy does not load `docker-compose.override.yml`.
+- [x] Review whether `php:apache-bookworm` should remain the base image.
+- [x] Only consider Alpine if required PHP extensions and Apache behavior remain
       simple and reliable.
+- [ ] Start the production Compose stack on the VPS with Watchtower.
+- [ ] Confirm Watchtower pulls the GHCR image and restarts the web service.
 
-Done when: production builds only the app code needed to run the website.
+Done when: Watchtower pulls a versioned web image and runs it beside the local
+VPS MySQL database.
+
+Implemented on 2026-05-27:
+
+- Local development builds the web image through `docker-compose.override.yml`.
+- Production Compose uses `WEB_IMAGE` and no longer builds the web app on the
+  VPS.
+- After merging to `main`, the web image is built and pushed manually with
+  `sha-*`, `main`, and `prod` tags.
+- Watchtower monitors only the labeled `web` container and updates it when the
+  pushed `prod` tag points to a new digest.
+- Swarm or another orchestrator is deferred until multi-replica rolling updates
+  become necessary.
+- Local `docker-compose build web` completed successfully.
 
 ## Phase 3: Separate Database Server
 
