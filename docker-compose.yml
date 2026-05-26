@@ -2,8 +2,6 @@ services:
   web:
     build: .
     container_name: web
-    ports:
-      - "8080:80"
     environment:
       DB_HOST: db
       DB_NAME: ${MYSQL_DATABASE}
@@ -30,6 +28,20 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    ports:
+      - "127.0.0.1:8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   db_data:

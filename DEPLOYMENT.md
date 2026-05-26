@@ -38,7 +38,7 @@ MYSQL_PASSWORD=replace_with_strong_app_password
 Start the services:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
 ```
 
 Initialize the database once:
@@ -121,11 +121,11 @@ The workflow SSHes into the VPS and runs:
 cd /opt/learningfullstack
 git fetch origin main
 git reset --hard origin/main
-docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.admin.yml ps
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml ps
 ```
 
-The explicit `-f` flags are intentional. They prevent Docker Compose from automatically loading `docker-compose.override.yml`, which is for development, while still starting phpMyAdmin from `docker-compose.admin.yml`.
+The explicit `-f` flags are intentional. They prevent Docker Compose from automatically loading `docker-compose.override.yml`, which is for development. phpMyAdmin is included in the base stack and bound to `127.0.0.1:8081`.
 
 phpMyAdmin is bound to `127.0.0.1:8081`, so it is only reachable from the VPS itself. Access it from your machine with an SSH tunnel:
 
@@ -147,6 +147,6 @@ If GitHub Actions is unavailable, deploy manually from the VPS:
 cd /opt/learningfullstack
 git fetch origin main
 git reset --hard origin/main
-docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.admin.yml ps
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml ps
 ```

@@ -1,0 +1,35 @@
+services:
+  traefik:
+    image: traefik:v3.6.2
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+
+  web:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.learningfullstack.rule=Host(`${APP_DOMAIN:-localhost}`)"
+      - "traefik.http.routers.learningfullstack.entrypoints=websecure"
+      - "traefik.http.routers.learningfullstack.tls.certresolver=letsencrypt"
+      - "traefik.http.services.learningfullstack.loadbalancer.server.port=80"
+
+volumes:
+  traefik_letsencrypt:
