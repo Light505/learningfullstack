@@ -167,11 +167,13 @@ copy .env.local.example .env
 Edit `.env` and set local values:
 
 ```env
-MYSQL_ROOT_PASSWORD=root_password_for_local_dev
-MYSQL_DATABASE=mydb
-MYSQL_USER=app_user
-MYSQL_PASSWORD=app_password_for_local_dev
 APP_DEBUG=true
+DB_HOST=db
+DB_PORT=3306
+DB_NAME=mydb
+DB_USER=app_user
+DB_PASS=app_password_for_local_dev
+MYSQL_ROOT_PASSWORD=root_password_for_local_dev
 ```
 
 Start the app and database:
@@ -190,16 +192,16 @@ Initialize the database schema:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:MYSQL_DATABASE = "mydb"
-Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:MYSQL_DATABASE"
+$env:DB_NAME = "mydb"
+Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
 ```
 
 With the older Compose command:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:MYSQL_DATABASE = "mydb"
-Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:MYSQL_DATABASE"
+$env:DB_NAME = "mydb"
+Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
 ```
 
 Open the app:

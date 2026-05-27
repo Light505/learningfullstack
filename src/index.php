@@ -10,6 +10,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
 
 // Database connection
 $db_host = getenv('DB_HOST') ?: 'db';
+$db_port = getenv('DB_PORT') ?: '3306';
 $db_name = getenv('DB_NAME') ?: 'mydb';
 $db_user = getenv('DB_USER') ?: 'user';
 $db_pass = getenv('DB_PASS') ?: 'password';
@@ -17,7 +18,7 @@ $debug_mode = (getenv('APP_DEBUG') === 'true');
 
 try {
     $pdo = new PDO(
-        "mysql:host=$db_host;dbname=$db_name;charset=utf8mb4",
+        "mysql:host=$db_host;port=$db_port;dbname=$db_name;charset=utf8mb4",
         $db_user,
         $db_pass,
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]

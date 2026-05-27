@@ -16,10 +16,12 @@ Edit `.env` and set local-only values:
 APP_DEBUG=true
 APP_DOMAIN=localhost
 WEB_IMAGE=learningfullstack-web:local
+DB_HOST=db
+DB_PORT=3306
+DB_NAME=mydb
+DB_USER=user
+DB_PASS=password
 MYSQL_ROOT_PASSWORD=rootpassword
-MYSQL_DATABASE=mydb
-MYSQL_USER=user
-MYSQL_PASSWORD=password
 ```
 
 Registry credentials do not belong in `.env`. Use `docker login ghcr.io` once
@@ -54,16 +56,16 @@ With the Docker Compose plugin:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:MYSQL_DATABASE = "mydb"
-Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:MYSQL_DATABASE"
+$env:DB_NAME = "mydb"
+Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
 ```
 
 With standalone Compose:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:MYSQL_DATABASE = "mydb"
-Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:MYSQL_DATABASE"
+$env:DB_NAME = "mydb"
+Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
 ```
 
 Do not run this every time unless you intentionally reset the database.

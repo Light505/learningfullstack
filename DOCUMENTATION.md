@@ -27,11 +27,13 @@ This is a lightweight, secure PHP landing page with an inquiry form. Users can s
 
 2. **Create `.env` file with your credentials:**
    ```env
-   MYSQL_ROOT_PASSWORD=rootpassword
-   MYSQL_DATABASE=mydb
-   MYSQL_USER=user
-   MYSQL_PASSWORD=password
    APP_DEBUG=false
+   DB_HOST=db
+   DB_PORT=3306
+   DB_NAME=mydb
+   DB_USER=user
+   DB_PASS=password
+   MYSQL_ROOT_PASSWORD=rootpassword
    ```
 
 3. **Pre-pull images (optional but recommended):**
@@ -111,10 +113,12 @@ Project/
 
 ```env
 # Database
+DB_HOST=db
+DB_PORT=3306
+DB_NAME=mydb
+DB_USER=user
+DB_PASS=password
 MYSQL_ROOT_PASSWORD=rootpassword
-MYSQL_DATABASE=mydb
-MYSQL_USER=user
-MYSQL_PASSWORD=password
 
 # Application
 APP_DEBUG=false              # Set to 'true' only during development
@@ -259,7 +263,7 @@ docker ps
 
 **PhpMyAdmin won't connect**
 - Ensure `db` service is healthy: `docker-compose logs db`
-- Verify `MYSQL_ROOT_PASSWORD` in `.env`
+- Verify `MYSQL_ROOT_PASSWORD` and the `DB_*` values in `.env`
 - Wait 10 seconds for MySQL to initialize
 
 ---

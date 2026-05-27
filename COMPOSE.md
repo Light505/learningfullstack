@@ -1,16 +1,16 @@
 # Docker Compose Files
 
-This project uses multiple Compose files so local development, production
-routing, and automatic image updates stay separate.
+This project keeps local development and VPS deployment separate. Local
+development uses the default Compose pair. The web VPS gets one deployment
+Compose file. The database VPS runs raw MySQL through `apt`, not Compose.
 
 ## File Roles
 
 | File | Purpose | Use it when |
 | --- | --- | --- |
-| `docker-compose.yml` | Base app stack: PHP/Apache web app, MySQL database, and phpMyAdmin. | Always. |
+| `docker-compose.yml` | Local/base web app service. | Local development with the override file. |
 | `docker-compose.override.yml` | Local development settings: localhost port, local build, and live-mounted `src/`. | Local development. Loaded automatically by Compose. |
-| `docker-compose.traefik.yml` | Production Traefik HTTPS reverse proxy. | Deploying to a public VPS. |
-| `docker-compose.watchtower.yml` | Watchtower auto-update service for the web image. | Current production update mechanism. |
+| `docker-compose.web.yml` | Complete web VPS stack: Traefik, web app, Watchtower, and optional phpMyAdmin profile. | Web VPS deployment. |
 
 ## Local Development
 
@@ -40,13 +40,13 @@ restarts the `web` container when the configured image tag points to a new
 digest.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f docker-compose.watchtower.yml up -d --remove-orphans
+docker compose -f docker-compose.web.yml up -d --remove-orphans
 ```
 
 Stop production with the same file set:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f docker-compose.watchtower.yml down --remove-orphans
+docker compose -f docker-compose.web.yml down --remove-orphans
 ```
 
 Set these values in production `.env`:
@@ -55,20 +55,33 @@ Set these values in production `.env`:
 WEB_IMAGE=ghcr.io/light505/learningfullstack:prod
 APP_DOMAIN=example.com
 TRAEFIK_ACME_EMAIL=admin@example.com
-MYSQL_ROOT_PASSWORD=replace_with_strong_root_password
-MYSQL_DATABASE=mydb
-MYSQL_USER=app_user
-MYSQL_PASSWORD=replace_with_strong_app_password
+DB_HOST=10.0.0.5
+DB_PORT=3306
+DB_NAME=mydb
+DB_USER=app_user
+DB_PASS=replace_with_strong_app_password
 WATCHTOWER_POLL_INTERVAL=300
 ```
 
-Use `.env.vps.example` as the VPS template. It does not include a GitHub token.
+Use `.env.web.example` as the web VPS template. Copy it to `.env` on the web
+VPS. It does not include a GitHub token.
 If the GHCR package is private, log Docker in once on the VPS with
 `docker login ghcr.io`. Watchtower mounts `${HOME}/.docker/config.json` so it can
 reuse Docker's saved registry credentials from that host.
 
 Use `.env.local.example` on your own machine for local development and optional
 GHCR image publishing.
+
+## Database VPS
+
+The database VPS runs raw MySQL installed with `apt`, not Docker Compose. Use
+`.env.database.example` as a notes/template file for the one real `.env` on that
+server, but MySQL itself is managed by `systemctl` and `/etc/mysql/...` config.
+
+The web VPS `.env` should use the database VPS address as `DB_HOST`. If private
+networking is unavailable, you can use the database VPS public IP for `DB_HOST`,
+but only with firewall rules that allow MySQL port `3306` from the web VPS IP
+and deny everyone else.
 
 Production image tag convention:
 
@@ -105,9 +118,16 @@ conflict.
 
 ## Production phpMyAdmin Access
 
-phpMyAdmin is included in the base stack and binds to `127.0.0.1:8081`. On a
-VPS, that means it is not publicly exposed by default. Access it through an SSH
-tunnel:
+phpMyAdmin is not part of the always-running production stack. Start it only
+when you need to inspect or test the production database. It connects to
+`DB_HOST` using `DB_USER` and `DB_PASS` from the web VPS `.env`:
+
+```bash
+docker compose -f docker-compose.web.yml --profile tools up -d phpmyadmin
+```
+
+It binds to `127.0.0.1:8081`, so it is not publicly exposed by default. Access
+it through an SSH local port tunnel to the web VPS:
 
 ```powershell
 ssh -L 8081:127.0.0.1:8081 <vps-user>@<vps-host>
@@ -117,4 +137,11 @@ Then open:
 
 ```text
 http://localhost:8081
+```
+
+When finished, stop it:
+
+```bash
+docker compose -f docker-compose.web.yml --profile tools stop phpmyadmin
+docker compose -f docker-compose.web.yml --profile tools rm -f phpmyadmin
 ```
