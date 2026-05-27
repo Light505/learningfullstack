@@ -55,6 +55,9 @@ changes from "build on server" to "pull and run a prebuilt image."
       simple and reliable.
 - [ ] Start the production Compose stack on the VPS with Watchtower.
 - [ ] Confirm Watchtower pulls the GHCR image and restarts the web service.
+- [ ] Verify VPS firewall allows only SSH, HTTP, and HTTPS publicly.
+- [ ] Verify Traefik serves a valid Let's Encrypt certificate for `APP_DOMAIN`.
+- [ ] Verify phpMyAdmin is reachable only through SSH tunnel.
 
 Done when: Watchtower pulls a versioned web image and runs it beside the local
 VPS MySQL database.
@@ -71,6 +74,8 @@ Implemented on 2026-05-27:
 - Swarm or another orchestrator is deferred until multi-replica rolling updates
   become necessary.
 - Local `docker-compose build web` completed successfully.
+- `DEPLOYMENT.md` now documents the polished VPS steps 5-10: image publishing,
+  runtime files, firewall, Traefik, HTTPS, and Watchtower.
 
 ## Phase 3: Separate Database Server
 
