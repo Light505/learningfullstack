@@ -3,7 +3,9 @@
 # =========================
 .env
 .env.*
-!.env.example
+!.env.local.example
+!.env.vps.example
+.docker-auth/
 
 # =========================
 # Docker

@@ -40,7 +40,13 @@ restarts the `web` container when the configured image tag points to a new
 digest.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f docker-compose.watchtower.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f docker-compose.watchtower.yml up -d --remove-orphans
+```
+
+Stop production with the same file set:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml -f docker-compose.watchtower.yml down --remove-orphans
 ```
 
 Set these values in production `.env`:
@@ -53,10 +59,16 @@ MYSQL_ROOT_PASSWORD=replace_with_strong_root_password
 MYSQL_DATABASE=mydb
 MYSQL_USER=app_user
 MYSQL_PASSWORD=replace_with_strong_app_password
-GHCR_USERNAME=Light505
-GHCR_TOKEN=github_token_with_package_read_access
 WATCHTOWER_POLL_INTERVAL=300
 ```
+
+Use `.env.vps.example` as the VPS template. It does not include a GitHub token.
+If the GHCR package is private, log Docker in once on the VPS with
+`docker login ghcr.io`. Watchtower mounts `${HOME}/.docker/config.json` so it can
+reuse Docker's saved registry credentials from that host.
+
+Use `.env.local.example` on your own machine for local development and optional
+GHCR image publishing.
 
 Production image tag convention:
 
@@ -74,6 +86,22 @@ com.centurylinklabs.watchtower.enable=true
 ```
 
 Currently only the `web` service has that label.
+
+Production runs three `web` replicas through:
+
+```yaml
+deploy:
+  replicas: 3
+```
+
+The `web` service intentionally has no `container_name`, because fixed container
+names prevent scaling. Traefik discovers the replicas through Docker labels and
+uses a sticky cookie so the current PHP file-based session behavior works across
+multiple web containers.
+
+Local development overrides this back to one replica in
+`docker-compose.override.yml` so the local `8080:80` port binding does not
+conflict.
 
 ## Production phpMyAdmin Access
 

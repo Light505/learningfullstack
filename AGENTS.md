@@ -64,3 +64,44 @@ I want to learn independently, guided by GitHub Copilot and other trusted resour
 ## 🚀 Long-Term Vision
 I aim to become a **professional web developer** who can design, build, and deploy secure, optimized, and scalable websites.  
 My journey is guided by curiosity, discipline, and a commitment to industry best practices.  
+
+---
+
+## Current Deployment Direction
+
+This project is learning from the Dreams of Code VPS deployment guide, but it is
+not trying to copy that system identically. Use the guide as a reference for
+deployment ideas and production habits, not as a strict blueprint.
+
+Current deployment pattern:
+- Work on `dev`.
+- Merge tested work into `main`.
+- Build the web image from `main` manually.
+- Push the image to GitHub Container Registry: `ghcr.io/light505/learningfullstack`.
+- Run only runtime deployment files on the VPS.
+- Use Docker Compose for the VPS stack.
+- Use Traefik for HTTPS and routing.
+- Use Watchtower to poll the `prod` image tag and restart the `web` container.
+- Keep MySQL on the same VPS for now.
+
+Intentional differences from the guide:
+- This app uses PHP/Apache and MySQL, not the guide's app/database stack.
+- The current deployment can run three `web` replicas behind Traefik on the VPS.
+- Watchtower is used for simple image updates now; Swarm/Kubernetes-style
+  rolling deployments are deferred until scaling is actually needed.
+- Secrets are currently managed with a protected `.env` file, not Docker
+  secrets. Revisit this later as the deployment matures.
+- Uptime monitoring is optional and belongs after the core deployment is stable.
+
+Current important docs:
+- `DEPLOYMENT.md` - VPS deployment steps 5-10.
+- `COMPOSE.md` - Compose file roles.
+- `DEVELOPMENT_PLAN.md` - phased infrastructure roadmap.
+
+When assisting with deployment, preserve this learning path:
+- Explain the concept clearly.
+- Prefer small, verifiable steps.
+- Avoid introducing advanced orchestration until the current phase is stable.
+- Keep the VPS deployment folder minimal: `.env`, Compose files, and
+  `database/init.sql`.
+- Never put secrets directly in Git-tracked files.

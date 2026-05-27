@@ -16,12 +16,12 @@ This plan keeps the project moving one clear step at a time. Work happens on
 Goal: make the project easy to run, test, stop, and reset locally.
 
 - [x] Confirm Docker Desktop or Docker Engine is installed locally.
-- [x] Create a local `.env` file from `.env.example`.
+- [x] Create a local `.env` file from `.env.local.example`.
 - [x] Start the local containers with Docker Compose.
 - [x] Initialize the database schema from `database/init.sql`.
 - [x] Open the app at `http://localhost:8080`.
 - [x] Open phpMyAdmin at `http://localhost:8081`.
-- [x] Document common local commands in `README.md`.
+- [x] Document common local commands in `LOCAL_DEVELOPMENT.md`.
 - [x] Keep Docker Compose file roles documented in `COMPOSE.md`.
 
 Done when: a fresh clone can run locally using documented commands.
@@ -54,7 +54,12 @@ changes from "build on server" to "pull and run a prebuilt image."
 - [x] Only consider Alpine if required PHP extensions and Apache behavior remain
       simple and reliable.
 - [ ] Start the production Compose stack on the VPS with Watchtower.
+- [ ] Confirm the VPS can `docker pull ghcr.io/light505/learningfullstack:prod`.
 - [ ] Confirm Watchtower pulls the GHCR image and restarts the web service.
+- [x] Slim the production image after the image/update loop is proven.
+- [x] Add three `web` replicas behind Traefik after the slimmed image is stable.
+- [ ] Confirm Watchtower uses rolling restart behavior across the three
+      replicas.
 
 Done when: Watchtower pulls a versioned web image and runs it beside the local
 VPS MySQL database.
@@ -68,8 +73,13 @@ Implemented on 2026-05-27:
   `sha-*`, `main`, and `prod` tags.
 - Watchtower monitors only the labeled `web` container and updates it when the
   pushed `prod` tag points to a new digest.
-- Swarm or another orchestrator is deferred until multi-replica rolling updates
-  become necessary.
+- Watchtower is configured for rolling restarts so the later three-replica VPS
+  setup can follow the Dreams of Code pattern without adding Swarm or
+  Kubernetes.
+- The production image avoids a separate recursive `chown` layer by using
+  `COPY --chown`.
+- The `web` service no longer sets `container_name`, so Compose can scale it.
+- Traefik uses a sticky cookie for the current PHP file-based sessions.
 - Local `docker-compose build web` completed successfully.
 
 ## Phase 3: Separate Database Server
@@ -146,11 +156,12 @@ behavior.
 
 ## Local Run Procedure
 
-From the repository root:
+See `LOCAL_DEVELOPMENT.md` for the current local run procedure. The short form
+from the repository root is:
 
 ```powershell
 cd learningfullstack
-copy .env.example .env
+copy .env.local.example .env
 ```
 
 Edit `.env` and set local values:
@@ -160,7 +171,6 @@ MYSQL_ROOT_PASSWORD=root_password_for_local_dev
 MYSQL_DATABASE=mydb
 MYSQL_USER=app_user
 MYSQL_PASSWORD=app_password_for_local_dev
-TRAEFIK_ACME_EMAIL=local@example.com
 APP_DEBUG=true
 ```
 
@@ -179,13 +189,17 @@ docker-compose up -d --build
 Initialize the database schema:
 
 ```powershell
-Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"<MYSQL_ROOT_PASSWORD>"
+$env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
+$env:MYSQL_DATABASE = "mydb"
+Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:MYSQL_DATABASE"
 ```
 
 With the older Compose command:
 
 ```powershell
-Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"<MYSQL_ROOT_PASSWORD>"
+$env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
+$env:MYSQL_DATABASE = "mydb"
+Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:MYSQL_DATABASE"
 ```
 
 Open the app:
@@ -203,13 +217,13 @@ http://localhost:8081
 Stop local containers:
 
 ```powershell
-docker compose down
+docker compose down --remove-orphans
 ```
 
 Reset the local database completely:
 
 ```powershell
-docker compose down -v
+docker compose down --remove-orphans -v
 docker compose up -d --build
 ```
 

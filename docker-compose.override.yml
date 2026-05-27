@@ -6,8 +6,5 @@ services:
       - "8080:80"
     volumes:
       - ./src:/var/www/html:cached
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+    deploy:
+      replicas: 1
