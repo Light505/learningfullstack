@@ -1,66 +1,59 @@
 # AGENTS.md
 
-## 🌍 About Me
-I am a college IT student learning how to build **production-ready websites**.  
-My chosen stack is:
-- **Docker** → containerization and deployment  
-- **Apache** → web server management  
-- **MySQL** → database management  
-- **PHP** → front-end and back-end development  
+## Project Context
 
-My priorities are **security, optimization, and ease of deployment**.  
-I want to learn independently, guided by GitHub Copilot and other trusted resources.
+This is a learning project for building production-ready websites with:
 
----
+- Docker for containerization and deployment.
+- Apache as the web server.
+- MySQL for database storage.
+- PHP for the application.
 
-## 🧭 Core Values
-1. **Security First** → Protect users, data, and infrastructure.  
-2. **Optimization Always** → Write efficient, scalable, and maintainable code.  
-3. **Ease of Deployment** → Automate and simplify workflows for reliability.  
-4. **Continuous Learning** → Learn by doing, researching, and experimenting.  
-5. **Professional Readiness** → Build habits and skills aligned with industry standards.  
+Priorities are security, optimization, ease of deployment, continuous learning,
+and professional readiness.
 
----
+## Current Deployment Direction
 
-## 📖 Learning Philosophy
-- Treat every project as if it were **production-ready**, even when practicing.  
-- Document everything I learn for future reference.  
-- Balance **self-learning** with guidance from Copilot and other resources.  
-- Build a portfolio that demonstrates **real-world skills**.  
+This project follows a small, verifiable VPS deployment path inspired by the
+Dreams of Code VPS guide. Use that guide as a reference for deployment ideas,
+not as a strict blueprint.
 
----
+Current pattern:
 
-## ✅ Roadmap & Checklist
+- Work on `dev`.
+- Merge tested work into `main`.
+- Build the web image from `main` manually.
+- Push the image to `ghcr.io/light505/learningfullstack`.
+- Run only runtime deployment files on the VPS.
+- Use Docker Compose for the VPS stack.
+- Use Traefik for HTTPS and routing.
+- Use Watchtower to poll the `prod` image tag and restart the `web` containers.
+- Keep MySQL on a separate database VPS for the current documented direction.
 
-### 🟢 Short-Term (Beginner)
-- [ ] Learn **Docker basics**: build, run, and manage containers.  
-- [ ] Set up a simple **Apache server** inside Docker.  
-- [ ] Create a **MySQL database** and connect it to PHP.  
-- [ ] Write basic **PHP scripts** for CRUD operations.  
-- [ ] Practice **Git & GitHub version control**.  
-- [ ] Understand **basic security practices** (input validation, HTTPS).  
+Intentional choices:
 
-### 🟡 Mid-Term (Intermediate)
-- [ ] Use **Docker Compose** for multi-container setups (Apache + MySQL + PHP).  
-- [ ] Configure **Apache virtual hosts** and enable SSL/TLS.  
-- [ ] Apply **indexes and normalization** in MySQL for performance.  
-- [ ] Write **secure PHP code** with prepared statements.  
-- [ ] Explore **MVC patterns** and frameworks (e.g., Laravel).  
-- [ ] Automate deployments with **CI/CD pipelines** (GitHub Actions).  
-- [ ] Learn **basic testing** (unit tests for PHP).  
+- This app uses PHP/Apache and MySQL.
+- The production web stack can run three `web` replicas behind Traefik.
+- Watchtower is used for simple image updates while advanced orchestration is
+  deferred.
+- Secrets are managed with protected `.env` files for now.
+- Uptime monitoring belongs after the core deployment is stable.
 
-### 🔵 Long-Term (Advanced)
-- [ ] Optimize Docker images (multi-stage builds, minimal base images).  
-- [ ] Implement **caching and compression** in Apache.  
-- [ ] Scale MySQL with **replication and backups**.  
-- [ ] Build **secure authentication systems** (password hashing, sessions, tokens).  
-- [ ] Deploy projects to **cloud providers** (AWS, Azure, DigitalOcean).  
-- [ ] Monitor performance with **logging and profiling tools**.  
-- [ ] Contribute to **open-source projects** for real-world experience.  
-- [ ] Prepare for **professional roles** with a strong portfolio.  
+## Important Docs
 
----
+- [docs/deployment.md](docs/deployment.md) - VPS deployment steps.
+- [docs/local-development.md](docs/local-development.md) - local run, test, and image push workflow.
+- [docs/roadmap.md](docs/roadmap.md) - future app and operations ideas.
+- [docs/handoff.md](docs/handoff.md) - current app state and verification checklist.
+- [docs/moderation-safety.md](docs/moderation-safety.md) - current safety controls and future moderation plan.
 
-## 🚀 Long-Term Vision
-I aim to become a **professional web developer** who can design, build, and deploy secure, optimized, and scalable websites.  
-My journey is guided by curiosity, discipline, and a commitment to industry best practices.  
+## Assistant Guidance
+
+When assisting with this project:
+
+- Explain concepts clearly.
+- Prefer small, verifiable steps.
+- Avoid advanced orchestration until the current phase is stable.
+- Keep the web VPS deployment folder minimal: `.env` and `docker-compose.web.yml`.
+- Keep the database VPS deployment folder minimal: `.env` and `database/migrations/`.
+- Never put secrets directly in Git-tracked files.

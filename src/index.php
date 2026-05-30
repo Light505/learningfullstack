@@ -1,449 +1,316 @@
 <?php
-// Start session for CSRF tokens
+require_once __DIR__ . '/app/security.php';
+require_once __DIR__ . '/app/config.php';
+require_once __DIR__ . '/app/database.php';
+require_once __DIR__ . '/app/marks.php';
+
 session_start();
+send_security_headers();
+csrf_token();
 
-// Security headers
-header('X-Content-Type-Options: nosniff');
-header('X-Frame-Options: SAMEORIGIN');
-header('X-XSS-Protection: 1; mode=block');
-header('Referrer-Policy: strict-origin-when-cross-origin');
-
-// Database connection
-$db_host = getenv('DB_HOST') ?: 'db';
-$db_name = getenv('DB_NAME') ?: 'mydb';
-$db_user = getenv('DB_USER') ?: 'user';
-$db_pass = getenv('DB_PASS') ?: 'password';
-$debug_mode = (getenv('APP_DEBUG') === 'true');
+$config = app_config();
+$marks = [];
 
 try {
-    $pdo = new PDO(
-        "mysql:host=$db_host;dbname=$db_name;charset=utf8mb4",
-        $db_user,
-        $db_pass,
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-    );
-} catch (PDOException $e) {
-    if ($debug_mode) {
-        die("Database connection failed: " . $e->getMessage());
-    } else {
-        die("Service temporarily unavailable. Please try again later.");
-    }
+    $pdo = create_pdo($config);
+    $saved_marks = all_marks($pdo);
+
+    $marks = array_map(function (array $mark): array {
+        return [
+            'uid' => $mark['uid'],
+            'name' => $mark['display_name'],
+            'message' => $mark['message'] ?? 'A quiet mark without words.',
+            'drawing' => $mark['drawing'] ?? '',
+            'x' => (float) $mark['x_percent'],
+            'y' => (float) $mark['y_percent'],
+            'color' => $mark['color'],
+            'shape' => $mark['shape'],
+            'tone' => 'saved',
+            'created' => date('M j, Y g:i A', strtotime($mark['created_at'])),
+        ];
+    }, $saved_marks);
+} catch (Throwable $e) {
+    error_log('Failed to load marks: ' . $e->getMessage());
+    $marks = [];
 }
 
-// Generate CSRF token if not exists
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
+$marks = array_map(function (array $mark, int $index): array {
+    $mark['uid'] = $mark['uid'] ?? 'sample-' . ($index + 1);
+    $mark['drawing'] = $mark['drawing'] ?? '';
+    return $mark;
+}, $marks, array_keys($marks));
 
-// Rate limiting: max 5 inquiries per IP per hour
-function check_rate_limit($pdo, $client_ip, $max_per_hour = 5) {
-    try {
-        $hour_ago = date('Y-m-d H:i:s', time() - 3600);
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM inquiries WHERE ip_address = ? AND created_at > ?");
-        $stmt->execute([$client_ip, $hour_ago]);
-        return $stmt->fetchColumn() < $max_per_hour;
-    } catch (PDOException $e) {
-        // If ip_address column doesn't exist, allow submission (graceful degradation)
-        return true;
-    }
-}
-
-$submitted = false;
-$error = null;
-$client_ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
-
-// Handle form submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Verify CSRF token
-    $token = $_POST['csrf_token'] ?? '';
-    if (empty($token) || $token !== ($_SESSION['csrf_token'] ?? '')) {
-        $error = "Invalid request. Please try again.";
-    } else {
-        $name = trim($_POST['name'] ?? '');
-        $email = trim($_POST['email'] ?? '');
-        $message = trim($_POST['message'] ?? '');
-        
-        // Input length validation
-        $max_name = 100;
-        $max_email = 255;
-        $max_message = 5000;
-        
-        // Validation
-        if (empty($name) || empty($email) || empty($message)) {
-            $error = "Please fill in all required fields.";
-        } elseif (strlen($name) > $max_name) {
-            $error = "Name must be less than $max_name characters.";
-        } elseif (strlen($email) > $max_email) {
-            $error = "Email is too long.";
-        } elseif (strlen($message) > $max_message) {
-            $error = "Message must be less than $max_message characters.";
-        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $error = "Please enter a valid email address.";
-        } elseif (!check_rate_limit($pdo, $client_ip)) {
-            $error = "Too many submissions. Please try again later.";
-        } else {
-            try {
-                // Insert into database
-                $stmt = $pdo->prepare("
-                    INSERT INTO inquiries (name, email, message, status, ip_address, created_at)
-                    VALUES (:name, :email, :message, 'new', :ip, NOW())
-                ");
-                $stmt->execute([
-                    ':name' => $name,
-                    ':email' => $email,
-                    ':message' => $message,
-                    ':ip' => $client_ip
-                ]);
-                $submitted = true;
-                // Regenerate token after successful submission
-                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-            } catch (PDOException $e) {
-                $error = "Error saving your inquiry. Please try again later.";
-                if ($debug_mode) {
-                    $error .= " (" . $e->getMessage() . ")";
-                }
-            }
-        }
-    }
-}
+$entry_count = count($marks);
+$has_marks = $entry_count > 0;
+$can_undo = !empty($_SESSION['last_mark_uid']);
+$preview_mark = $marks[0] ?? [
+    'name' => 'No mark selected',
+    'message' => 'Choose an existing mark to preview it here.',
+    'drawing' => '',
+    'color' => '#f0b35a',
+    'created' => 'Waiting for the first mark.',
+];
+$recent_marks = array_slice(array_reverse($marks), 0, 5);
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Order & Inquiry - Your Business</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-        }
-        
-        header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem 0;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        
-        .nav-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .logo {
-            font-size: 1.5rem;
-            font-weight: bold;
-        }
-        
-        nav a {
-            color: white;
-            margin-left: 2rem;
-            text-decoration: none;
-            transition: opacity 0.3s;
-        }
-        
-        nav a:hover {
-            opacity: 0.8;
-        }
-        
-        .hero {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 5rem 2rem;
-            text-align: center;
-        }
-        
-        .hero h1 {
-            font-size: 2.5rem;
-            margin-bottom: 1rem;
-        }
-        
-        .hero p {
-            font-size: 1.2rem;
-            margin-bottom: 2rem;
-            opacity: 0.9;
-        }
-        
-        .cta-buttons {
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-        
-        .btn {
-            padding: 0.8rem 2rem;
-            border: none;
-            border-radius: 4px;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-block;
-        }
-        
-        .btn-primary {
-            background: white;
-            color: #667eea;
-            font-weight: bold;
-        }
-        
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .btn-secondary {
-            background: transparent;
-            color: white;
-            border: 2px solid white;
-        }
-        
-        .btn-secondary:hover {
-            background: white;
-            color: #667eea;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 2rem;
-        }
-        
-        .section {
-            padding: 4rem 0;
-        }
-        
-        .section h2 {
-            text-align: center;
-            margin-bottom: 3rem;
-            font-size: 2rem;
-        }
-        
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 2rem;
-        }
-        
-        .feature {
-            background: white;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            transition: transform 0.3s;
-        }
-        
-        .feature:hover {
-            transform: translateY(-5px);
-        }
-        
-        .feature h3 {
-            color: #667eea;
-            margin-bottom: 1rem;
-        }
-        
-        #inquiry-form {
-            background: #f8f9fa;
-            padding: 2rem;
-            border-radius: 8px;
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-        }
-        
-        .form-group input,
-        .form-group textarea {
-            width: 100%;
-            padding: 0.8rem;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 1rem;
-            font-family: inherit;
-        }
-        
-        .form-group textarea {
-            resize: vertical;
-            min-height: 120px;
-        }
-        
-        .form-group input:focus,
-        .form-group textarea:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 5px rgba(102, 126, 234, 0.1);
-        }
-        
-        .form-submit {
-            width: 100%;
-            padding: 1rem;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            font-size: 1rem;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-        
-        .form-submit:hover {
-            background: #764ba2;
-        }
-        
-        .success-message {
-            background: #d4edda;
-            color: #155724;
-            padding: 1rem;
-            border-radius: 4px;
-            margin-bottom: 2rem;
-            text-align: center;
-        }
-        
-        footer {
-            background: #333;
-            color: white;
-            text-align: center;
-            padding: 2rem;
-            margin-top: 4rem;
-        }
-        
-        @media (max-width: 768px) {
-            .hero h1 {
-                font-size: 1.8rem;
-            }
-            
-            .cta-buttons {
-                flex-direction: column;
-            }
-            
-            nav a {
-                margin-left: 1rem;
-                font-size: 0.9rem;
-            }
-        }
-    </style>
+    <title>I was here</title>
+    <link rel="stylesheet" href="/assets/css/home.css">
+    <script src="/assets/js/canvas-prototype.js" defer></script>
 </head>
 <body>
-    <header>
-        <div class="nav-container">
-            <div class="logo">Your Business</div>
-            <nav>
-                <a href="#features">Features</a>
-                <a href="#inquiry">Inquiry</a>
-            </nav>
-        </div>
-    </header>
-    
-    <section class="hero">
-        <div class="container">
-            <h1>Welcome to Lighthal HomePageTEST</h1>
-            <p>Fast, reliable service. Quality you can trust.</p>
-            <div class="cta-buttons">
-                <button class="btn btn-primary" onclick="document.getElementById('inquiry').scrollIntoView({behavior: 'smooth'})">Send Inquiry</button>
-                <a href="#features" class="btn btn-secondary">Learn More</a>
+    <main class="app-shell">
+        <section class="workspace" aria-labelledby="page-title">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Digital cave wall</p>
+                    <h1 id="page-title">I was here</h1>
+                </div>
+                <div class="entry-count" aria-label="Current canvas entry count">
+                    <span data-entry-count><?= $entry_count ?></span>
+                    <small data-entry-count-label>marks on the wall</small>
+                </div>
+            </header>
+
+            <div class="canvas-layout">
+                <section class="canvas-panel" aria-label="Canvas prototype">
+                    <div class="canvas-toolbar" aria-label="Canvas tools preview">
+                        <button type="button" class="tool-button active" data-place-button>
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <path d="M12 21s6-5.33 6-11a6 6 0 0 0-12 0c0 5.67 6 11 6 11Z"></path>
+                                <circle cx="12" cy="10" r="2"></circle>
+                            </svg>
+                            Place
+                        </button>
+                        <button type="button" class="tool-button" data-random-button>
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <path d="M16 3h5v5"></path>
+                                <path d="M4 20 21 3"></path>
+                                <path d="M21 16v5h-5"></path>
+                                <path d="M15 15 21 21"></path>
+                                <path d="M4 4l5 5"></path>
+                            </svg>
+                            Random
+                        </button>
+                        <div class="zoom-controls" aria-label="Canvas zoom controls">
+                            <button type="button" class="icon-button" aria-label="Zoom out" data-zoom-out-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <circle cx="11" cy="11" r="7"></circle>
+                                    <path d="M8 11h6"></path>
+                                    <path d="m16 16 5 5"></path>
+                                </svg>
+                            </button>
+                            <button type="button" class="icon-button" aria-label="Reset canvas view" data-reset-view-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M3 12a9 9 0 1 0 3-6.7"></path>
+                                    <path d="M3 3v6h6"></path>
+                                </svg>
+                            </button>
+                            <button type="button" class="icon-button" aria-label="Zoom in" data-zoom-in-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <circle cx="11" cy="11" r="7"></circle>
+                                    <path d="M11 8v6"></path>
+                                    <path d="M8 11h6"></path>
+                                    <path d="m16 16 5 5"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <button
+                            type="button"
+                            class="icon-button"
+                            aria-label="Focus latest mark"
+                            data-focus-latest-button
+                            <?= $has_marks ? '' : 'disabled' ?>
+                        >
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="3"></circle>
+                                <path d="M12 2v4"></path>
+                                <path d="M12 18v4"></path>
+                                <path d="M2 12h4"></path>
+                                <path d="M18 12h4"></path>
+                            </svg>
+                        </button>
+                        <button
+                            type="button"
+                            class="icon-button"
+                            aria-label="Undo latest mark"
+                            data-undo-button
+                            data-csrf-token="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>"
+                            <?= $can_undo ? '' : 'disabled' ?>
+                        >
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <path d="M9 14 4 9l5-5"></path>
+                                <path d="M4 9h11a5 5 0 0 1 0 10h-4"></path>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div
+                        class="mark-canvas <?= $has_marks ? 'has-marks' : '' ?>"
+                        aria-label="Canvas with saved marks"
+                        data-mark-canvas
+                        data-min-distance="<?= htmlspecialchars((string) mark_limits()['min_distance_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-min-coordinate="<?= htmlspecialchars((string) mark_limits()['min_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-max-coordinate="<?= htmlspecialchars((string) mark_limits()['max_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                    >
+                        <div class="canvas-hint" data-canvas-hint>
+                            <div>
+                                <strong>A quiet wall for small proof.</strong>
+                                <span>Each mark keeps a little breathing room for whoever arrives next.</span>
+                            </div>
+                            <button type="button" aria-label="Hide canvas note" data-hide-canvas-hint>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="m6 6 12 12"></path>
+                                    <path d="m18 6-12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="empty-state" aria-hidden="true">
+                            <strong>No marks yet.</strong>
+                            <span>The first visitor gets the whole silence.</span>
+                        </div>
+
+                        <div class="canvas-world" data-canvas-world>
+                            <div class="canvas-tiles" data-canvas-tiles aria-hidden="true"></div>
+
+                            <?php foreach ($marks as $index => $mark): ?>
+                                <button
+                                    type="button"
+                                    class="mark-dot <?= htmlspecialchars($mark['shape'], ENT_QUOTES, 'UTF-8') ?>"
+                                    style="
+                                        --mark-x: <?= htmlspecialchars((string) $mark['x'], ENT_QUOTES, 'UTF-8') ?>%;
+                                        --mark-y: <?= htmlspecialchars((string) $mark['y'], ENT_QUOTES, 'UTF-8') ?>%;
+                                        --mark-color: <?= htmlspecialchars($mark['color'], ENT_QUOTES, 'UTF-8') ?>;
+                                    "
+                                    data-uid="<?= htmlspecialchars($mark['uid'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-name="<?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-message="<?= htmlspecialchars($mark['message'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-drawing="<?= htmlspecialchars($mark['drawing'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-created="<?= htmlspecialchars($mark['created'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-x="<?= htmlspecialchars((string) $mark['x'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-y="<?= htmlspecialchars((string) $mark['y'], ENT_QUOTES, 'UTF-8') ?>"
+                                    aria-label="View <?= htmlspecialchars($mark['tone'], ENT_QUOTES, 'UTF-8') ?> <?= htmlspecialchars($mark['shape'], ENT_QUOTES, 'UTF-8') ?> mark by <?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?>"
+                                    <?= $index === 0 ? 'data-selected="true"' : '' ?>
+                                ></button>
+                            <?php endforeach; ?>
+                        </div>
+                        <div class="placement-marker" data-placement-marker hidden aria-hidden="true"></div>
+                    </div>
+                </section>
+
+                <aside class="side-panel" aria-label="Mark preview and compose mockup">
+                    <section class="mark-preview <?= $has_marks ? '' : 'is-empty' ?>">
+                        <p class="panel-label">Selected mark</p>
+                        <div class="preview-chip" style="background: <?= htmlspecialchars($preview_mark['color'], ENT_QUOTES, 'UTF-8') ?>" aria-hidden="true"></div>
+                        <h2 data-preview-name><?= htmlspecialchars($preview_mark['name'], ENT_QUOTES, 'UTF-8') ?></h2>
+                        <p data-preview-message><?= htmlspecialchars($preview_mark['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                        <div class="preview-drawing" data-preview-drawing hidden aria-label="Selected mark drawing"></div>
+                        <small data-preview-created><?= htmlspecialchars($preview_mark['created'], ENT_QUOTES, 'UTF-8') ?></small>
+                    </section>
+
+                    <section class="compose-preview">
+                        <p class="panel-label">Leave a mark</p>
+                        <form class="mark-form" data-mark-form>
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>">
+                            <input type="hidden" name="x_percent" data-x-field value="">
+                            <input type="hidden" name="y_percent" data-y-field value="">
+                            <input type="hidden" name="drawing" data-drawing-field value="">
+                            <label>
+                                Display name
+                                <input type="text" name="display_name" maxlength="80" placeholder="Future visitor" required>
+                            </label>
+                            <label>
+                                Short message
+                                <textarea name="message" maxlength="280" placeholder="I was here."></textarea>
+                            </label>
+                            <div class="drawing-tool">
+                                <div class="drawing-tool-header">
+                                    <span>Drawing</span>
+                                    <button type="button" class="mini-button" data-drawing-clear>Clear</button>
+                                </div>
+                                <canvas
+                                    class="drawing-canvas"
+                                    width="240"
+                                    height="120"
+                                    data-drawing-canvas
+                                    aria-label="Optional drawing pad"
+                                ></canvas>
+                            </div>
+                            <fieldset>
+                                <legend>Color</legend>
+                                <label class="swatch-option">
+                                    <input type="radio" name="color" value="#d9826b" checked>
+                                    <span class="swatch clay"></span>
+                                </label>
+                                <label class="swatch-option">
+                                    <input type="radio" name="color" value="#9fc5a8">
+                                    <span class="swatch moss"></span>
+                                </label>
+                                <label class="swatch-option">
+                                    <input type="radio" name="color" value="#86a6c9">
+                                    <span class="swatch dusk"></span>
+                                </label>
+                                <label class="swatch-option">
+                                    <input type="radio" name="color" value="#f0b35a">
+                                    <span class="swatch ember"></span>
+                                </label>
+                            </fieldset>
+                            <fieldset class="shape-picker">
+                                <legend>Shape</legend>
+                                <label class="shape-option" title="Circle">
+                                    <input type="radio" name="shape" value="circle" checked>
+                                    <span class="shape-icon circle" aria-hidden="true"></span>
+                                    <span class="sr-only">Circle</span>
+                                </label>
+                                <label class="shape-option" title="Square">
+                                    <input type="radio" name="shape" value="square">
+                                    <span class="shape-icon square" aria-hidden="true"></span>
+                                    <span class="sr-only">Square</span>
+                                </label>
+                                <label class="shape-option" title="Diamond">
+                                    <input type="radio" name="shape" value="diamond">
+                                    <span class="shape-icon diamond" aria-hidden="true"></span>
+                                    <span class="sr-only">Diamond</span>
+                                </label>
+                            </fieldset>
+                            <button type="submit" class="submit-preview" disabled data-submit-button>Choose a spot first</button>
+                            <p class="prototype-note" data-placement-note>Click an open spot on the wall, or use Random.</p>
+                            <p class="form-status" data-form-status role="status"></p>
+                        </form>
+                    </section>
+
+                </aside>
+
+                <section class="recent-preview" aria-labelledby="recent-title">
+                    <div class="section-heading">
+                        <p class="panel-label">Recent marks</p>
+                        <span><span data-recent-total><?= $entry_count ?></span> total</span>
+                    </div>
+                    <ol id="recent-title" class="recent-list" aria-label="Recent marks" data-recent-list>
+                        <?php if (count($recent_marks) === 0): ?>
+                            <li class="recent-empty">No recent marks yet.</li>
+                        <?php endif; ?>
+                        <?php foreach ($recent_marks as $mark): ?>
+                            <li>
+                                <button type="button" class="recent-mark-button" data-recent-uid="<?= htmlspecialchars($mark['uid'], ENT_QUOTES, 'UTF-8') ?>">
+                                    <span class="recent-dot" style="--mark-color: <?= htmlspecialchars($mark['color'], ENT_QUOTES, 'UTF-8') ?>"></span>
+                                    <span>
+                                        <strong><?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?></strong>
+                                        <p><?= htmlspecialchars($mark['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                                        <small><?= htmlspecialchars($mark['created'], ENT_QUOTES, 'UTF-8') ?></small>
+                                    </span>
+                                </button>
+                            </li>
+                        <?php endforeach; ?>
+                    </ol>
+                </section>
             </div>
-        </div>
-    </section>
-    
-    <section id="features" class="section container">
-        <h2>Why Choose Us?</h2>
-        <div class="features">
-            <div class="feature">
-                <h3>🚀 Fast Service</h3>
-                <p>We pride ourselves on quick turnaround times and efficient delivery.</p>
-            </div>
-            <div class="feature">
-                <h3>✨ Quality Guaranteed</h3>
-                <p>Our team ensures every order meets the highest standards.</p>
-            </div>
-            <div class="feature">
-                <h3>💬 24/7 Support</h3>
-                <p>Have questions? We're here to help you anytime.</p>
-            </div>
-        </div>
-    </section>
-    
-    <section id="inquiry" class="section container">
-        <h2>Send an Inquiry</h2>
-        
-        <?php if ($error): ?>
-            <div style="background: #f8d7da; color: #721c24; padding: 1rem; border-radius: 4px; margin-bottom: 2rem; border: 1px solid #f5c6cb;">
-                ✗ <?= htmlspecialchars($error) ?>
-            </div>
-        <?php endif; ?>
-        
-        <?php if ($submitted): ?>
-            <div class="success-message">
-                ✓ Thank you! We received your inquiry and will get back to you soon.
-            </div>
-        <?php else: ?>
-        
-        <form id="inquiry-form" method="POST">
-            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token'] ?? '') ?>">
-            
-            <div class="form-group">
-                <label for="name">Name *</label>
-                <input type="text" id="name" name="name" value="<?= htmlspecialchars($_POST['name'] ?? '') ?>" maxlength="100" required>
-                <small style="color: #999;">Max 100 characters</small>
-            </div>
-            
-            <div class="form-group">
-                <label for="email">Email *</label>
-                <input type="email" id="email" name="email" value="<?= htmlspecialchars($_POST['email'] ?? '') ?>" maxlength="255" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="message">Message * <span style="color: #999;">(<span id="char-count">0</span>/5000)</span></label>
-                <textarea id="message" name="message" maxlength="5000" required><?= htmlspecialchars($_POST['message'] ?? '') ?></textarea>
-            </div>
-            
-            <button type="submit" class="form-submit">Send Inquiry</button>
-        </form>
-        
-        <?php endif; ?>
-    </section>
-    
-    <footer>
-        <p>&copy; <?= date('Y') ?> Your Business. All rights reserved.</p>
-    </footer>
-    
-    <script>
-        // Character counter for message textarea (only if form is visible)
-        const messageField = document.getElementById('message');
-        const charCount = document.getElementById('char-count');
-        
-        if (messageField && charCount) {
-            messageField.addEventListener('input', function() {
-                charCount.textContent = this.value.length;
-            });
-            // Set initial count if form was resubmitted with error
-            charCount.textContent = messageField.value.length;
-        }
-    </script>
+        </section>
+        <div class="mark-toast-region" aria-live="polite" aria-label="New mark notifications" data-toast-region></div>
+    </main>
 </body>
 </html>

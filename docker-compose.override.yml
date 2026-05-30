@@ -6,8 +6,49 @@ services:
       - "8080:80"
     volumes:
       - ./src:/var/www/html:cached
+    environment:
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME:-${MYSQL_DATABASE}}
+      DB_USER: ${DB_USER:-${MYSQL_USER}}
+      DB_PASS: ${DB_PASS:-${MYSQL_PASSWORD}}
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+
+  db:
+    image: mysql:8.0
+    container_name: db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-${DB_NAME}}
+      MYSQL_USER: ${MYSQL_USER:-${DB_USER}}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-${DB_PASS}}
+    volumes:
+      - db_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 30s
       timeout: 10s
       retries: 5
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    ports:
+      - "127.0.0.1:8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db_data:

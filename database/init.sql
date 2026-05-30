@@ -1,21 +1,27 @@
-CREATE DATABASE IF NOT EXISTS mydb
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
+-- Compatibility bootstrap for simple setup.
+-- New schema changes should be added as ordered files in database/migrations/.
 
-USE mydb;
-
-CREATE TABLE IF NOT EXISTS inquiries (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(255) NOT NULL,
-    message TEXT NOT NULL,
-    status ENUM('new', 'read', 'replied') NOT NULL DEFAULT 'new',
-    ip_address VARCHAR(45) NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS marks (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    uid CHAR(36) NOT NULL,
+    x_percent DECIMAL(5,2) NOT NULL,
+    y_percent DECIMAL(5,2) NOT NULL,
+    display_name VARCHAR(80) NOT NULL,
+    message VARCHAR(280) NULL,
+    drawing LONGTEXT NULL,
+    color CHAR(7) NOT NULL,
+    shape ENUM('circle', 'square', 'diamond') NOT NULL DEFAULT 'circle',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_marks_uid (uid),
+    INDEX idx_marks_created_at (created_at),
+    INDEX idx_marks_position (x_percent, y_percent)
 );
 
-CREATE INDEX idx_inquiries_ip_created_at
-ON inquiries (ip_address, created_at);
-
-CREATE INDEX idx_inquiries_status
-ON inquiries (status);
+CREATE TABLE IF NOT EXISTS rate_limits (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_key CHAR(64) NOT NULL,
+    action VARCHAR(40) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_rate_limits_lookup (client_key, action, created_at),
+    INDEX idx_rate_limits_created_at (created_at)
+);

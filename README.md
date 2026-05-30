@@ -1,61 +1,56 @@
-# learningfullstack
-Learning CI/CD with docker
-STACK: Apache, MySQL, PHP
+# I was here
 
-## Local development
+A small PHP/MySQL web app where visitors leave a mark on a shared canvas.
 
-Create your local environment file:
+Marks can include a display name, short message, optional drawing, color, shape,
+and canvas position. The app uses Docker for local development and production
+image builds.
 
-```powershell
-copy .env.example .env
-```
-
-Edit `.env` and set local passwords. Then start the app:
+## Quick Start
 
 ```powershell
+copy .env.local.example .env
 docker compose up -d --build
+.\scripts\apply-migrations.ps1
 ```
 
-If your machine does not have the newer `docker compose` command, use
-`docker-compose` instead:
-
-```powershell
-docker-compose up -d --build
-```
-
-Initialize the database once:
-
-```powershell
-Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"<MYSQL_ROOT_PASSWORD>"
-```
-
-With the older Compose command:
-
-```powershell
-Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"<MYSQL_ROOT_PASSWORD>"
-```
-
-Open the app:
+Open:
 
 ```text
 http://localhost:8080
-```
-
-phpMyAdmin runs with the normal Compose stack. Open:
-
-```text
 http://localhost:8081
 ```
 
-See `DEVELOPMENT_PLAN.md` for the step-by-step infrastructure checklist.
-See `COMPOSE.md` for how the Docker Compose files are organized.
+Docker Compose loads `docker-compose.override.yml` automatically for local
+development. That starts the web app, MySQL, and phpMyAdmin.
 
-## Database setup
-
-Create the database schema manually after starting MySQL. For local
-development, prefer the command above so the SQL is executed through the
-Compose project.
+## Checks
 
 ```powershell
-docker exec -i db mysql -u root -p < database/init.sql
+.\scripts\check.ps1
+.\scripts\check.ps1 -WithDatabase
+.\scripts\smoke.ps1
+.\scripts\smoke.ps1 -WithPost
+npm run test:playwright
 ```
+
+## Main Files
+
+```text
+src/                         PHP app, CSS, and browser JS
+database/init.sql            Fresh database bootstrap schema
+database/migrations/         Incremental schema migrations
+scripts/                     Local check, smoke, and migration scripts
+tests/                       PHP and Playwright tests
+docker-compose.yml           Base web service
+docker-compose.override.yml  Local development services
+docker-compose.web.yml       VPS web stack
+```
+
+## Docs
+
+- [Local development](docs/local-development.md)
+- [Deployment](docs/deployment.md)
+- [Roadmap](docs/roadmap.md)
+- [Handoff](docs/handoff.md)
+- [Moderation and safety](docs/moderation-safety.md)

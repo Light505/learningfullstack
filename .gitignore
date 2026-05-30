@@ -1,56 +1,29 @@
-# =========================
-# Environment Variables (CRITICAL)
-# =========================
+# Secrets and local environment
 .env
 .env.*
-!.env.example
+!.env.local.example
+!.env.web.example
+!.env.database.example
+.docker-auth/
 
-# =========================
-# Docker
-# =========================
-# Note: docker-compose.override.yml is auto-loaded by docker compose
-# and should be version-controlled for dev environments
-
-# =========================
-# Logs
-# =========================
+# Logs and temporary files
 *.log
 logs/
-apache.log
-php_errors.log
+*.tmp
+*.bak
 
-# =========================
-# OS Files
-# =========================
+# OS and editor files
 .DS_Store
 Thumbs.db
-
-# =========================
-# IDE / Editor
-# =========================
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# =========================
-# Dependency Folders (if added later)
-# =========================
+# Dependencies and generated output
 node_modules/
 vendor/
-
-# =========================
-# Test / Coverage
-# =========================
 coverage/
+playwright-report/
+test-results/
 __tests__/
-
-# =========================
-# Temporary Files
-# =========================
-*.tmp
-*.bak
-
-# =========================
-# OTHERS
-# =========================

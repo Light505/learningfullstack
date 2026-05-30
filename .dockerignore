@@ -1,36 +1,23 @@
-# Git
 .git
-.gitignore
 .github/
+.docker-auth/
 
-# Docker Compose (not needed in build context)
-docker-compose*.yml
-
-# Database migration files are deployed separately
-database/
-
-# Environment files (secrets should not be in image)
 .env
 .env.*
 
-# Logs
-*.log
+docker-compose*.yml
+database/
+docs/
+*.md
+
 logs/
-
-# Node (if you ever add frontend)
+*.log
 node_modules/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Tests
+vendor/
 coverage/
 __tests__/
 
-# Documentation
-*.md
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

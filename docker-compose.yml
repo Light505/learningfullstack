@@ -1,49 +1,22 @@
 services:
   web:
     image: ${WEB_IMAGE:-learningfullstack-web:local}
-    container_name: web
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     environment:
-      DB_HOST: db
-      DB_NAME: ${MYSQL_DATABASE}
-      DB_USER: ${MYSQL_USER}
-      DB_PASS: ${MYSQL_PASSWORD}
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: unless-stopped
-
-  db:
-    image: mysql:8.0
-    container_name: db
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    volumes:
-      - db_data:/var/lib/mysql
+      APP_DEBUG: ${APP_DEBUG:-false}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME:-${MYSQL_DATABASE}}
+      DB_USER: ${DB_USER:-${MYSQL_USER}}
+      DB_PASS: ${DB_PASS:-${MYSQL_PASSWORD}}
+    deploy:
+      replicas: 3
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test:
+        - CMD-SHELL
+        - 'php -r ''exit(trim(@file_get_contents("http://127.0.0.1/health.php")) === "ok" ? 0 : 1);'''
       interval: 30s
       timeout: 10s
       retries: 5
-
-  phpmyadmin:
-    image: phpmyadmin/phpmyadmin
-    container_name: phpmyadmin
-    ports:
-      - "127.0.0.1:8081:80"
-    environment:
-      PMA_HOST: db
-      PMA_USER: root
-      PMA_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-    depends_on:
-      db:
-        condition: service_healthy
     restart: unless-stopped
-
-volumes:
-  db_data:

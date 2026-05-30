@@ -1,4 +1,4 @@
-FROM php:apache-bookworm
+FROM php:8.3-apache-bookworm
 
 # Install required PHP extensions
 RUN docker-php-ext-install -j"$(nproc)" pdo_mysql \
@@ -6,10 +6,7 @@ RUN docker-php-ext-install -j"$(nproc)" pdo_mysql \
 
 WORKDIR /var/www/html
 
-# Copy application code
-COPY src/ /var/www/html/
-
-# Set proper permissions (important for Apache)
-RUN chown -R www-data:www-data /var/www/html
+COPY docker/php/production.ini /usr/local/etc/php/conf.d/production.ini
+COPY --chown=www-data:www-data src/ ./
 
 EXPOSE 80

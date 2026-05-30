@@ -1,0 +1,87 @@
+services:
+  traefik:
+    image: traefik:v3.6.2
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+
+  web:
+    image: ${WEB_IMAGE}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.learningfullstack.rule=Host(`${APP_DOMAIN}`)"
+      - "traefik.http.routers.learningfullstack.entrypoints=websecure"
+      - "traefik.http.routers.learningfullstack.tls.certresolver=letsencrypt"
+      - "traefik.http.services.learningfullstack.loadbalancer.server.port=80"
+      - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie=true"
+      - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie.name=learningfullstack_backend"
+      - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie.secure=true"
+      - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie.httponly=true"
+      - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie.samesite=lax"
+    environment:
+      APP_DEBUG: ${APP_DEBUG:-false}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+    deploy:
+      replicas: 3
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'php -r ''exit(trim(@file_get_contents("http://127.0.0.1/health.php")) === "ok" ? 0 : 1);'''
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    environment:
+      DOCKER_API_VERSION: "1.40"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-300}
+      WATCHTOWER_ROLLING_RESTART: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.docker/config.json:/config.json:ro
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    profiles:
+      - tools
+    ports:
+      - "127.0.0.1:8081:80"
+    environment:
+      PMA_HOST: ${DB_HOST}
+      PMA_PORT: ${DB_PORT:-3306}
+      PMA_USER: ${DB_USER}
+      PMA_PASSWORD: ${DB_PASS}
+    restart: "no"
+
+volumes:
+  traefik_letsencrypt:
