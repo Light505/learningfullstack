@@ -24,6 +24,8 @@ automatically, so local startup should stay:
 docker compose up -d
 ```
 
+Do not pass a separate env file during normal local startup.
+
 Later, local secrets should move to Windows 11 user environment variables.
 
 ## Database

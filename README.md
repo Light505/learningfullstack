@@ -24,6 +24,12 @@ http://localhost:8081
 Docker Compose loads `docker-compose.override.yml` automatically for local
 development. That starts the web app, MySQL, and phpMyAdmin.
 
+Normal local startup should stay:
+
+```powershell
+docker compose up -d
+```
+
 ## Checks
 
 ```powershell
