@@ -217,6 +217,24 @@ textarea:disabled {
     cursor: grab;
 }
 
+.mark-canvas[data-placement-state="valid"] {
+    cursor: crosshair;
+}
+
+.mark-canvas[data-placement-state="invalid"] {
+    cursor: not-allowed;
+}
+
+.mark-canvas[data-placement-state="invalid"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    border: 2px solid rgba(156, 61, 50, 0.22);
+    border-radius: inherit;
+    pointer-events: none;
+}
+
 .mark-canvas.is-panning {
     cursor: grabbing;
 }
@@ -550,6 +568,17 @@ textarea:disabled {
     box-shadow: 0 0 0 8px rgba(240, 179, 90, 0.16);
 }
 
+.mark-preview.is-empty .preview-chip {
+    opacity: 0.58;
+    box-shadow: 0 0 0 8px rgba(240, 179, 90, 0.08);
+}
+
+.mark-preview.is-empty h2,
+.mark-preview.is-empty p,
+.mark-preview.is-empty small {
+    color: var(--muted);
+}
+
 .mark-preview h2 {
     margin: 0 0 10px;
     font-size: 1.55rem;
@@ -832,19 +861,47 @@ textarea {
 }
 
 .recent-list li {
-    display: grid;
-    grid-template-columns: 18px minmax(0, 1fr);
-    gap: 10px;
     min-width: 0;
-    padding: 8px;
     border: 1px solid rgba(61, 48, 36, 0.1);
     border-radius: 8px;
     background: rgba(255, 250, 241, 0.55);
+    overflow: hidden;
 }
 
 .recent-list li:first-child {
     border-top: 1px solid rgba(61, 48, 36, 0.1);
-    padding-top: 8px;
+}
+
+.recent-mark-button {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 10px;
+    width: 100%;
+    min-height: 100%;
+    padding: 8px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.recent-mark-button:hover,
+.recent-mark-button:focus-visible {
+    background: rgba(255, 248, 235, 0.86);
+    outline: 0;
+}
+
+.recent-mark-button:focus-visible {
+    box-shadow: inset 0 0 0 2px rgba(47, 42, 34, 0.34);
+}
+
+.recent-empty {
+    grid-column: 1 / -1;
+    padding: 14px;
+    color: var(--muted);
+    font-size: 0.9rem;
+    text-align: center;
 }
 
 .recent-dot {

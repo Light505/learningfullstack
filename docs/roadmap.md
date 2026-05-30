@@ -1,45 +1,50 @@
 # Roadmap
 
-This file keeps future work in one place. The detailed infrastructure sequence
-lives in [development-plan.md](development-plan.md).
+This is the single project roadmap.
 
-## High Priority
+## Done
 
-- [ ] Email notifications for users and admins.
-- [ ] Admin dashboard for viewing, filtering, and moderating marks.
-- [ ] Contact form improvements: phone number, category, optional fields.
-- [ ] Production HTTPS validation through Traefik and Let's Encrypt.
+- Docker local development with web, MySQL, and phpMyAdmin.
+- Production-style image build and GHCR tag plan.
+- Database schema for marks and rate limits.
+- Real mark submission, validation, CSRF protection, and undo.
+- Non-overlapping placement rules.
+- Random placement within committed canvas tiles.
+- Server-Sent Events for near real-time mark updates.
+- Optional drawing marks.
+- Panning, zooming, and dynamic 3x3 canvas expansion.
+- Basic spam and rate-limit controls.
+- Playwright coverage for layout, mark flow, drawing, and canvas expansion.
 
-## Security
+## Before Next Image Push
 
-- [x] Add a baseline Content Security Policy.
-- [ ] Replace inline CSS/JS with external assets or nonces, then tighten CSP by
-      removing `unsafe-inline`.
-- [ ] Review proxy/IP handling before deploying behind more infrastructure.
-- [ ] Add CAPTCHA or another bot-control layer if abuse appears.
-- [ ] Add regular dependency and image update checks.
-- [x] Add a production PHP ini override for safer default runtime settings.
+- [ ] Commit the current polish and documentation changes.
+- [ ] Rebuild the local image.
+- [ ] Run `.\scripts\check.ps1 -WithDatabase`.
+- [ ] Run `.\scripts\smoke.ps1 -WithPost`.
+- [ ] Run `npm run test:playwright`.
 
-## App Quality
+## Product Polish
 
-- [ ] Add focused PHP tests for validation and submission behavior.
-- [ ] Improve accessibility of the form and navigation.
-- [ ] Add real-time validation feedback where it helps users.
-- [ ] Add structured logging for production troubleshooting.
+- [ ] Add a small build/version indicator for easier container testing.
+- [ ] Improve mobile placement and drawing ergonomics.
+- [ ] Add better empty-state guidance after the first canvas expansion.
+- [ ] Add a simple way to reset local demo data without touching production.
+- [ ] Review copy after manual testing.
 
 ## Operations
 
+- [ ] Use Windows 11 user environment variables for local development secrets
+      instead of `.env`.
 - [ ] Add scheduled MySQL backups and test restore.
 - [ ] Add CI checks for pull requests.
 - [ ] Document rollback from a known-good `sha-*` image tag.
-- [ ] Add deployment health checks after Compose updates.
-- [ ] Use Windows 11 user environment variables for local development secrets
-      instead of `.env` or command-line variables.
+- [ ] Confirm Watchtower rolling updates against three web replicas.
 
-## Later Learning Tracks
+## Later Features
 
-- [ ] Learn MVC structure or evaluate Laravel for the next app.
-- [ ] Move sessions to a shared store before scaling beyond one host. See
-      [session-strategy.md](session-strategy.md).
-- [ ] Research managed database options.
-- [ ] Explore Kubernetes only after the current VPS workflow is stable.
+- [ ] Admin/moderator page.
+- [ ] Hide/restore marks instead of hard deleting moderation cases.
+- [ ] Public report flow if traffic grows.
+- [ ] Shared session storage before scaling beyond one VPS.
+- [ ] Drawing tool improvements.

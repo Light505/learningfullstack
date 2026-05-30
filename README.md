@@ -1,26 +1,17 @@
-# learningfullstack
+# I was here
 
-Learning CI/CD and production-style deployment with Docker, Apache, MySQL, and
-PHP.
+A small PHP/MySQL web app where visitors leave a mark on a shared canvas.
 
-## Project Layout
-
-```text
-learningfullstack/
-|-- src/                         PHP application
-|-- database/                    Database schema
-|-- docs/                        Project guides and roadmap
-|-- Dockerfile                   PHP/Apache image
-|-- docker-compose.yml           Base web service
-|-- docker-compose.override.yml  Local development services
-`-- docker-compose.web.yml       Web VPS deployment stack
-```
+Marks can include a display name, short message, optional drawing, color, shape,
+and canvas position. The app uses Docker for local development and production
+image builds.
 
 ## Quick Start
 
 ```powershell
 copy .env.local.example .env
 docker compose up -d --build
+.\scripts\apply-migrations.ps1
 ```
 
 Open:
@@ -30,25 +21,8 @@ http://localhost:8080
 http://localhost:8081
 ```
 
-Initialize the local schema once:
-
-```powershell
-$env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:DB_NAME = "appdb"
-.\scripts\apply-migrations.ps1
-```
-
-## Guides
-
-- [Local development](docs/local-development.md)
-- [Website roadmap](docs/website-roadmap.md)
-- [Handoff](docs/handoff.md)
-- [Design review checklist](docs/design-review.md)
-- [VPS deployment](docs/deployment.md)
-- [Compose file roles](docs/compose.md)
-- [Development plan](docs/development-plan.md)
-- [Session strategy](docs/session-strategy.md)
-- [Roadmap](docs/roadmap.md)
+Docker Compose loads `docker-compose.override.yml` automatically for local
+development. That starts the web app, MySQL, and phpMyAdmin.
 
 ## Checks
 
@@ -57,4 +31,26 @@ $env:DB_NAME = "appdb"
 .\scripts\check.ps1 -WithDatabase
 .\scripts\smoke.ps1
 .\scripts\smoke.ps1 -WithPost
+npm run test:playwright
 ```
+
+## Main Files
+
+```text
+src/                         PHP app, CSS, and browser JS
+database/init.sql            Fresh database bootstrap schema
+database/migrations/         Incremental schema migrations
+scripts/                     Local check, smoke, and migration scripts
+tests/                       PHP and Playwright tests
+docker-compose.yml           Base web service
+docker-compose.override.yml  Local development services
+docker-compose.web.yml       VPS web stack
+```
+
+## Docs
+
+- [Local development](docs/local-development.md)
+- [Deployment](docs/deployment.md)
+- [Roadmap](docs/roadmap.md)
+- [Handoff](docs/handoff.md)
+- [Moderation and safety](docs/moderation-safety.md)

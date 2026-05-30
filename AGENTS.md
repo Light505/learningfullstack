@@ -42,9 +42,10 @@ Intentional choices:
 ## Important Docs
 
 - [docs/deployment.md](docs/deployment.md) - VPS deployment steps.
-- [docs/compose.md](docs/compose.md) - Compose file roles.
-- [docs/development-plan.md](docs/development-plan.md) - phased infrastructure roadmap.
+- [docs/local-development.md](docs/local-development.md) - local run, test, and image push workflow.
 - [docs/roadmap.md](docs/roadmap.md) - future app and operations ideas.
+- [docs/handoff.md](docs/handoff.md) - current app state and verification checklist.
+- [docs/moderation-safety.md](docs/moderation-safety.md) - current safety controls and future moderation plan.
 
 ## Assistant Guidance
 

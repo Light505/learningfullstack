@@ -50,6 +50,7 @@ $preview_mark = $marks[0] ?? [
     'color' => '#f0b35a',
     'created' => 'Waiting for the first mark.',
 ];
+$recent_marks = array_slice(array_reverse($marks), 0, 5);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -120,6 +121,21 @@ $preview_mark = $marks[0] ?? [
                         <button
                             type="button"
                             class="icon-button"
+                            aria-label="Focus latest mark"
+                            data-focus-latest-button
+                            <?= $has_marks ? '' : 'disabled' ?>
+                        >
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="3"></circle>
+                                <path d="M12 2v4"></path>
+                                <path d="M12 18v4"></path>
+                                <path d="M2 12h4"></path>
+                                <path d="M18 12h4"></path>
+                            </svg>
+                        </button>
+                        <button
+                            type="button"
+                            class="icon-button"
                             aria-label="Undo latest mark"
                             data-undo-button
                             data-csrf-token="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>"
@@ -187,7 +203,7 @@ $preview_mark = $marks[0] ?? [
                 </section>
 
                 <aside class="side-panel" aria-label="Mark preview and compose mockup">
-                    <section class="mark-preview">
+                    <section class="mark-preview <?= $has_marks ? '' : 'is-empty' ?>">
                         <p class="panel-label">Selected mark</p>
                         <div class="preview-chip" style="background: <?= htmlspecialchars($preview_mark['color'], ENT_QUOTES, 'UTF-8') ?>" aria-hidden="true"></div>
                         <h2 data-preview-name><?= htmlspecialchars($preview_mark['name'], ENT_QUOTES, 'UTF-8') ?></h2>
@@ -275,14 +291,19 @@ $preview_mark = $marks[0] ?? [
                         <span><span data-recent-total><?= $entry_count ?></span> total</span>
                     </div>
                     <ol id="recent-title" class="recent-list" aria-label="Recent marks" data-recent-list>
-                        <?php foreach (array_slice($marks, 0, 5) as $mark): ?>
+                        <?php if (count($recent_marks) === 0): ?>
+                            <li class="recent-empty">No recent marks yet.</li>
+                        <?php endif; ?>
+                        <?php foreach ($recent_marks as $mark): ?>
                             <li>
-                                <span class="recent-dot" style="--mark-color: <?= htmlspecialchars($mark['color'], ENT_QUOTES, 'UTF-8') ?>"></span>
-                                <div>
-                                    <strong><?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?></strong>
-                                    <p><?= htmlspecialchars($mark['message'], ENT_QUOTES, 'UTF-8') ?></p>
-                                    <small><?= htmlspecialchars($mark['created'], ENT_QUOTES, 'UTF-8') ?></small>
-                                </div>
+                                <button type="button" class="recent-mark-button" data-recent-uid="<?= htmlspecialchars($mark['uid'], ENT_QUOTES, 'UTF-8') ?>">
+                                    <span class="recent-dot" style="--mark-color: <?= htmlspecialchars($mark['color'], ENT_QUOTES, 'UTF-8') ?>"></span>
+                                    <span>
+                                        <strong><?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?></strong>
+                                        <p><?= htmlspecialchars($mark['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                                        <small><?= htmlspecialchars($mark['created'], ENT_QUOTES, 'UTF-8') ?></small>
+                                    </span>
+                                </button>
                             </li>
                         <?php endforeach; ?>
                     </ol>

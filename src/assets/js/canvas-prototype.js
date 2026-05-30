@@ -23,6 +23,7 @@ const randomButton = document.querySelector("[data-random-button]");
 const zoomInButton = document.querySelector("[data-zoom-in-button]");
 const zoomOutButton = document.querySelector("[data-zoom-out-button]");
 const resetViewButton = document.querySelector("[data-reset-view-button]");
+const focusLatestButton = document.querySelector("[data-focus-latest-button]");
 const undoButton = document.querySelector("[data-undo-button]");
 const placementMarker = document.querySelector("[data-placement-marker]");
 const submitButton = document.querySelector("[data-submit-button]");
@@ -49,6 +50,7 @@ let viewAnimation = null;
 let geometryDirty = true;
 let renderedTileSignature = "";
 const markPositions = new Map();
+const markPreview = document.querySelector(".mark-preview");
 
 function setActiveTool(activeButton) {
     [placeButton, randomButton].forEach((button) => {
@@ -381,6 +383,12 @@ function visibleWorldBounds() {
     };
 }
 
+function clearPlacementState() {
+    if (canvas) {
+        delete canvas.dataset.placementState;
+    }
+}
+
 function isTextInputTarget(target) {
     return target?.closest("input, textarea, select, [contenteditable='true']");
 }
@@ -431,6 +439,28 @@ function tooCloseToExistingMarks(x, y, ignoredUid = "") {
         const dy = y - markY;
         return (dx * dx) + (dy * dy) < minDistanceSquared;
     });
+}
+
+function placementStateForPoint(x, y) {
+    if (x < minCoordinate || x > maxCoordinate || y < minCoordinate || y > maxCoordinate) {
+        return "invalid";
+    }
+
+    if (!isCommittedCoordinate(x, y)) {
+        return "invalid";
+    }
+
+    return tooCloseToExistingMarks(x, y) ? "invalid" : "valid";
+}
+
+function updatePlacementHover(event) {
+    if (!canvas || event.target.closest(".canvas-hint") || event.target.closest(".mark-dot")) {
+        clearPlacementState();
+        return;
+    }
+
+    const { x, y } = canvasPointFromEvent(event);
+    canvas.dataset.placementState = placementStateForPoint(x, y);
 }
 
 function rejectPlacement(message) {
@@ -484,12 +514,39 @@ function setPlacement(x, y) {
 function selectMark(mark) {
     marks.forEach((item) => item.removeAttribute("data-selected"));
     mark.setAttribute("data-selected", "true");
+    markPreview?.classList.remove("is-empty");
 
     previewChip.style.background = getComputedStyle(mark).getPropertyValue("--mark-color");
     previewName.textContent = mark.dataset.name;
     previewMessage.textContent = mark.dataset.message;
     renderDrawingPreview(mark.dataset.drawing || "");
     previewCreated.textContent = mark.dataset.created;
+}
+
+function setEmptyPreview() {
+    marks.forEach((item) => item.removeAttribute("data-selected"));
+    markPreview?.classList.add("is-empty");
+    previewChip.style.background = "#f0b35a";
+    previewName.textContent = "No mark selected";
+    previewMessage.textContent = "Choose an existing mark to preview it here.";
+    if (previewDrawing) {
+        previewDrawing.innerHTML = "";
+        previewDrawing.hidden = true;
+    }
+    previewCreated.textContent = "Waiting for the first mark.";
+}
+
+function focusMark(mark, targetZoom = 1.35) {
+    if (!mark) {
+        return;
+    }
+
+    selectMark(mark);
+    focusCanvasOnCoordinate(
+        Number.parseFloat(mark.dataset.x || "0"),
+        Number.parseFloat(mark.dataset.y || "0"),
+        targetZoom,
+    );
 }
 
 function bindMark(mark) {
@@ -685,6 +742,9 @@ function updateCounts(count) {
     if (recentTotal) {
         recentTotal.textContent = count;
     }
+    if (focusLatestButton) {
+        focusLatestButton.disabled = count === 0;
+    }
 }
 
 function renderRecent(markItems) {
@@ -693,14 +753,26 @@ function renderRecent(markItems) {
     }
 
     recentList.innerHTML = "";
+    if (markItems.length === 0) {
+        const item = document.createElement("li");
+        item.className = "recent-empty";
+        item.textContent = "No recent marks yet.";
+        recentList.appendChild(item);
+        return;
+    }
+
     markItems.forEach((mark) => {
         const item = document.createElement("li");
+        const button = document.createElement("button");
         const dot = document.createElement("span");
-        const body = document.createElement("div");
+        const body = document.createElement("span");
         const name = document.createElement("strong");
         const message = document.createElement("p");
         const created = document.createElement("small");
 
+        button.type = "button";
+        button.className = "recent-mark-button";
+        button.dataset.recentUid = mark.uid;
         dot.className = "recent-dot";
         dot.style.setProperty("--mark-color", mark.color);
         name.textContent = mark.name;
@@ -708,7 +780,8 @@ function renderRecent(markItems) {
         created.textContent = mark.created;
 
         body.append(name, message, created);
-        item.append(dot, body);
+        button.append(dot, body);
+        item.append(button);
         recentList.appendChild(item);
     });
 }
@@ -813,6 +886,9 @@ function syncMarks(payload) {
     rebuildWorldForCurrentMarks();
     renderRecent(recentMarks);
     updateCounts(payload.count);
+    if (marks.length === 0) {
+        setEmptyPreview();
+    }
 
     if (liveSyncReady) {
         recentMarks
@@ -876,6 +952,8 @@ rebuildMarkPositionCache();
 const selectedMark = marks.find((mark) => mark.dataset.selected === "true");
 if (selectedMark) {
     selectMark(selectedMark);
+} else if (marks.length === 0) {
+    setEmptyPreview();
 }
 
 updateShapePreviewColor();
@@ -966,6 +1044,9 @@ if (canvas && xField && yField && placementNote) {
 
     canvas.addEventListener("pointermove", (event) => {
         if (!panStart || panStart.pointerId !== event.pointerId) {
+            if (!panStart) {
+                updatePlacementHover(event);
+            }
             return;
         }
 
@@ -986,6 +1067,9 @@ if (canvas && xField && yField && placementNote) {
             if (panStart && panStart.pointerId === event.pointerId) {
                 panStart = null;
                 canvas.classList.remove("is-panning");
+            }
+            if (eventName === "pointerleave") {
+                clearPlacementState();
             }
         });
     });
@@ -1026,6 +1110,28 @@ if (canvas && xField && yField && placementNote) {
 
             placementNote.classList.add("error");
             placementNote.textContent = "The wall is crowded here. Try choosing a spot manually.";
+        });
+    }
+
+    if (recentList) {
+        recentList.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-recent-uid]");
+            if (!button) {
+                return;
+            }
+
+            const mark = marks.find((item) => item.dataset.uid === button.dataset.recentUid);
+            focusMark(mark);
+        });
+    }
+
+    if (focusLatestButton) {
+        focusLatestButton.addEventListener("click", () => {
+            const latestUid = recentList?.querySelector("[data-recent-uid]")?.dataset.recentUid;
+            const mark = latestUid
+                ? marks.find((item) => item.dataset.uid === latestUid)
+                : marks[marks.length - 1];
+            focusMark(mark, 1.45);
         });
     }
 

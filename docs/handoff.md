@@ -1,52 +1,36 @@
 # Handoff
 
-## Project
+## Current State
 
-`learningfullstack` now contains the early version of `I was here`, a nostalgic
-digital cave-wall website where visitors will eventually leave small marks on a
-shared canvas.
+`I was here` is now a working canvas guestbook.
 
-## Current Focus
+Visitors can:
 
-Backend and infrastructure work is paused unless needed for the website.
+- choose a canvas spot or use random placement;
+- leave a display name, message, drawing, color, and shape;
+- see marks saved from MySQL;
+- select marks on the canvas;
+- use Recent Marks for navigation;
+- see near real-time updates through Server-Sent Events;
+- undo their latest mark in the current session.
 
-The current page is a frontend design prototype only. It does not yet submit,
-store, or retrieve real marks.
+The canvas starts with one tile and expands to a 3x3 area around newly saved
+marks without deleting existing marks.
 
-## What Exists
+## Important Files
 
-- Visual prototype: `src/index.php`
-- Page CSS: `src/assets/css/home.css`
-- Prototype interaction JS: `src/assets/js/canvas-prototype.js`
-- Cave wall texture: `src/assets/images/cave-wall-texture.png`
-- Product roadmap: `docs/website-roadmap.md`
-- Design review checklist: `docs/design-review.md`
-- Infrastructure/deployment roadmap: `docs/development-plan.md`
+```text
+src/index.php                       Main page
+src/assets/css/home.css             App styling
+src/assets/js/canvas-prototype.js   Canvas, form, drawing, realtime behavior
+src/api/marks.php                   Mark create/list/undo API
+src/api/marks-stream.php            Server-Sent Events stream
+src/app/marks.php                   Mark validation and repository logic
+database/init.sql                   Fresh database schema
+database/migrations/                Incremental migrations
+```
 
-## Design Intent
-
-The website should feel friendly and nostalgic, like a quiet digital cave wall.
-
-Important product ideas:
-
-- visitors leave a mark;
-- a mark contains a display name and optional short message;
-- marks appear as small dots/shapes on the canvas;
-- clicking a mark expands or previews its details;
-- marks should not overlap;
-- users can choose a color and shape;
-- users can choose placement or random placement;
-- the page should show how many marks exist.
-
-## Current Prototype Behavior
-
-- The canvas uses static sample mark data.
-- The entry count is `count($marks)` in `src/index.php`.
-- Clicking a sample mark updates the selected-mark preview.
-- The compose panel is disabled intentionally.
-- The Recent Marks section is a static preview.
-
-## How To Run Locally
+## Local Run
 
 ```powershell
 docker compose up -d --build
@@ -58,27 +42,16 @@ Open:
 http://localhost:8080
 ```
 
-## Checks
+## Verification
 
-Run static checks:
-
-```powershell
-.\scripts\check.ps1
-```
-
-Run live smoke checks while containers are running:
+Before pushing an image, run:
 
 ```powershell
-.\scripts\smoke.ps1
+.\scripts\check.ps1 -WithDatabase
+.\scripts\smoke.ps1 -WithPost
+npm run test:playwright
 ```
 
-## Suggested Next Step
+## Next Good Step
 
-Review Version 2 using `docs/design-review.md`, then start Version 3 from
-`docs/website-roadmap.md` when the design is approved:
-
-1. Build mark validation and save logic.
-2. Render saved marks from the database.
-3. Replace the disabled compose preview with a real form.
-
-Do not build real mark submission until the visual direction is approved.
+Push a tested image, then continue product polish from `docs/roadmap.md`.

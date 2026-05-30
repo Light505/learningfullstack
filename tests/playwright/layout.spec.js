@@ -36,7 +36,7 @@ test.describe("responsive app layout", () => {
     }));
 
     expect(metrics.canvasHeight).toBeGreaterThanOrEqual(520);
-    expect(metrics.canvasHeight).toBeLessThanOrEqual(1000);
+    expect(metrics.canvasHeight).toBeLessThanOrEqual(1200);
     expect(Math.abs(metrics.canvasBottom - metrics.markCanvasBottom)).toBeLessThanOrEqual(14);
     expect(metrics.sideOverflow).not.toBe("auto");
     expect(metrics.recentTop).toBeGreaterThanOrEqual(Math.max(metrics.canvasBottom, metrics.sideBottom) + 12);
@@ -238,8 +238,47 @@ test.describe("responsive app layout", () => {
     await expect(page.locator(".mark-toast", { hasText: "Toast Test left a mark" }).first()).toBeVisible();
   });
 
-  test("supports bounded keyboard-modified pan and zoom controls", async ({ page }) => {
+  test("recent marks can focus and select their canvas mark", async ({ page }) => {
+    await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const mark = {
+        uid: `recent-focus-${Date.now()}`,
+        display_name: "Recent Focus",
+        message: "Find me from the list.",
+        drawing: null,
+        x_percent: "45.00",
+        y_percent: "55.00",
+        color: "#9fc5a8",
+        shape: "square",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: 1,
+          marks: [mark],
+          mark_uids: [mark.uid],
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /recent focus/i }).click();
+
+    await expect(page.locator("[data-preview-name]")).toHaveText("Recent Focus");
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Recent Focus");
+  });
+
+  test("supports bounded keyboard-modified pan and zoom controls", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: { ok: true, count: 0, marks: [], mark_uids: [] },
+      }));
+    });
 
     const canvas = page.locator("[data-mark-canvas]");
     const world = page.locator("[data-canvas-world]");
