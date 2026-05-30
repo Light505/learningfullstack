@@ -30,6 +30,16 @@ Normal local startup should stay:
 docker compose up -d
 ```
 
+Production uses a separate startup command on the web VPS:
+
+```bash
+cd /opt/learningfullstack
+docker compose -f docker-compose.web.yml up -d --remove-orphans
+```
+
+Production phpMyAdmin is started only when needed with the `tools` profile. See
+[Deployment](docs/deployment.md).
+
 ## Checks
 
 ```powershell

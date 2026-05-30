@@ -28,6 +28,14 @@ Do not pass a separate env file during normal local startup.
 
 Later, local secrets should move to Windows 11 user environment variables.
 
+Production uses a different Compose file and should always be started from the
+web VPS with:
+
+```bash
+cd /opt/learningfullstack
+docker compose -f docker-compose.web.yml up -d --remove-orphans
+```
+
 ## Database
 
 Schema files live in `database/init.sql` and `database/migrations/`.

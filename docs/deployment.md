@@ -60,6 +60,42 @@ docker compose -f docker-compose.web.yml down --remove-orphans
 
 Do not add `-v` unless you intentionally want to delete Traefik certificates.
 
+## phpMyAdmin
+
+phpMyAdmin is a temporary production tool. It is not part of the normal web
+startup.
+
+Start or recreate it only when needed:
+
+```bash
+cd /opt/learningfullstack
+docker compose -f docker-compose.web.yml --profile tools up -d --force-recreate phpmyadmin
+```
+
+Use an SSH tunnel from your machine to the web VPS:
+
+```powershell
+ssh -L 8081:127.0.0.1:8081 <web-user>@<web-vps-ip>
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8081
+```
+
+If `.env` changes, recreate phpMyAdmin before opening it. Containers keep the
+environment they started with, so an old phpMyAdmin container can still use old
+database credentials.
+
+Stop phpMyAdmin when finished:
+
+```bash
+cd /opt/learningfullstack
+docker compose -f docker-compose.web.yml --profile tools stop phpmyadmin
+docker compose -f docker-compose.web.yml --profile tools rm -f phpmyadmin
+```
+
 ## Database VPS
 
 MySQL is installed directly on the database VPS, not through Compose.
@@ -183,6 +219,15 @@ docker compose -f docker-compose.web.yml up -d --force-recreate web
 
 Keep the username consistent. If the web VPS uses `DB_USER=appuser`, MySQL must
 have a user like `'appuser'@'<web-vps-ip>'`.
+
+If phpMyAdmin shows the same error while the web app works, recreate phpMyAdmin:
+
+```bash
+cd /opt/learningfullstack
+docker compose -f docker-compose.web.yml --profile tools up -d --force-recreate phpmyadmin
+```
+
+That refreshes phpMyAdmin's container environment from the current `.env`.
 
 ## Rollback
 

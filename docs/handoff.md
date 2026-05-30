@@ -42,6 +42,19 @@ Open:
 http://localhost:8080
 ```
 
+Normal local startup after the first build should stay:
+
+```powershell
+docker compose up -d
+```
+
+Production startup on the web VPS should stay:
+
+```bash
+cd /opt/learningfullstack
+docker compose -f docker-compose.web.yml up -d --remove-orphans
+```
+
 ## Verification
 
 Before pushing an image, run:
