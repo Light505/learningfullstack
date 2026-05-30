@@ -18,11 +18,11 @@ Goal: make the project easy to run, test, stop, and reset locally.
 - [x] Confirm Docker Desktop or Docker Engine is installed locally.
 - [x] Create a local `.env` file from `.env.local.example`.
 - [x] Start the local containers with Docker Compose.
-- [x] Initialize the database schema from `database/init.sql`.
+- [x] Initialize the database schema from `database/migrations/`.
 - [x] Open the app at `http://localhost:8080`.
 - [x] Open phpMyAdmin at `http://localhost:8081`.
-- [x] Document common local commands in `LOCAL_DEVELOPMENT.md`.
-- [x] Keep Docker Compose file roles documented in `COMPOSE.md`.
+- [x] Document common local commands in `docs/local-development.md`.
+- [x] Keep Docker Compose file roles documented in `docs/compose.md`.
 
 Done when: a fresh clone can run locally using documented commands.
 
@@ -30,7 +30,8 @@ Verified on 2026-05-27:
 
 - `docker-compose up -d --build` started `web`, `db`, and `phpmyadmin`.
 - `db` reported healthy.
-- `mydb` contains the `inquiries` table.
+- The earlier placeholder app used an `inquiries` table; the current product
+  direction uses `marks`.
 - `http://localhost:8080` returned HTTP 200.
 - `http://localhost:8081` returned HTTP 200.
 
@@ -79,7 +80,8 @@ Implemented on 2026-05-27:
 - The production image avoids a separate recursive `chown` layer by using
   `COPY --chown`.
 - The `web` service no longer sets `container_name`, so Compose can scale it.
-- Traefik uses a sticky cookie for the current PHP file-based sessions.
+- Traefik uses a sticky cookie as a temporary bridge for the current PHP
+  file-based sessions. See `docs/session-strategy.md`.
 - Local `docker-compose build web` completed successfully.
 
 ## Phase 3: Separate Database Server
@@ -132,10 +134,8 @@ Goal: understand scaling before implementing it.
 - [ ] Learn the difference between a reverse proxy and a load balancer.
 - [ ] Decide whether Traefik will run on one public edge VPS.
 - [ ] Decide whether each app server gets its own VPS.
-- [ ] Confirm how sessions will work across multiple app servers.
-- [ ] Consider sticky sessions only as a temporary learning step.
-- [ ] Consider Redis or database-backed sessions for a more production-ready
-      setup.
+- [x] Document current sticky-session behavior and its limits.
+- [ ] Move sessions to Redis or MySQL before multiple app VPS instances.
 
 Done when: the scaling design is documented before any server is added.
 
@@ -156,7 +156,8 @@ behavior.
 
 ## Local Run Procedure
 
-See `LOCAL_DEVELOPMENT.md` for the current local run procedure. The short form
+See [local-development.md](local-development.md) for the current local run
+procedure. The short form
 from the repository root is:
 
 ```powershell
@@ -192,16 +193,16 @@ Initialize the database schema:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:DB_NAME = "mydb"
-Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
+$env:DB_NAME = "appdb"
+.\scripts\apply-migrations.ps1
 ```
 
 With the older Compose command:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:DB_NAME = "mydb"
-Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
+$env:DB_NAME = "appdb"
+.\scripts\apply-migrations.ps1 -ComposeCommand docker-compose
 ```
 
 Open the app:

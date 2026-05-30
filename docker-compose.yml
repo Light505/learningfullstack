@@ -5,17 +5,17 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
     environment:
       APP_DEBUG: ${APP_DEBUG:-false}
-      DB_HOST: ${DB_HOST}
+      DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-3306}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASS: ${DB_PASS}
+      DB_NAME: ${DB_NAME:-${MYSQL_DATABASE}}
+      DB_USER: ${DB_USER:-${MYSQL_USER}}
+      DB_PASS: ${DB_PASS:-${MYSQL_PASSWORD}}
     deploy:
       replicas: 3
     healthcheck:
       test:
         - CMD-SHELL
-        - 'php -r ''exit(@file_get_contents("http://127.0.0.1/") === false ? 1 : 0);'''
+        - 'php -r ''exit(trim(@file_get_contents("http://127.0.0.1/health.php")) === "ok" ? 0 : 1);'''
       interval: 30s
       timeout: 10s
       retries: 5

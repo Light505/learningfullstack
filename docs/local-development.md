@@ -56,16 +56,16 @@ With the Docker Compose plugin:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:DB_NAME = "mydb"
-Get-Content .\database\init.sql | docker compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
+$env:DB_NAME = "appdb"
+.\scripts\apply-migrations.ps1
 ```
 
 With standalone Compose:
 
 ```powershell
 $env:MYSQL_ROOT_PASSWORD = "<MYSQL_ROOT_PASSWORD>"
-$env:DB_NAME = "mydb"
-Get-Content .\database\init.sql | docker-compose exec -T db mysql -uroot -p"$env:MYSQL_ROOT_PASSWORD" "$env:DB_NAME"
+$env:DB_NAME = "appdb"
+.\scripts\apply-migrations.ps1 -ComposeCommand docker-compose
 ```
 
 Do not run this every time unless you intentionally reset the database.
@@ -162,9 +162,18 @@ docker push "$IMAGE`:prod"
 ```
 
 For a private GHCR package, the VPS needs its own Docker login with a PAT that
-has `read:packages`. See `DEPLOYMENT.md`.
+has `read:packages`. See [deployment.md](deployment.md).
 
 ## 6. Stop Local Containers
+
+## Run Local Checks
+
+```powershell
+.\scripts\check.ps1
+.\scripts\check.ps1 -WithDatabase
+.\scripts\smoke.ps1
+.\scripts\smoke.ps1 -WithPost
+```
 
 ```powershell
 docker compose down --remove-orphans

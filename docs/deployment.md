@@ -133,7 +133,8 @@ Copy only these runtime files to `/opt/learningfullstack-db`:
 /opt/learningfullstack-db/
 |-- .env
 `-- database/
-    `-- init.sql
+    `-- migrations/
+        `-- 001_create_marks.sql
 ```
 
 Create `.env` from `.env.database.example` and set `DB_HOST` to the database VPS
@@ -202,13 +203,13 @@ Import the schema once:
 set -a
 . ./.env
 set +a
-sudo mysql "$DB_NAME" < database/init.sql
+cat database/migrations/*.sql | sudo mysql "$DB_NAME"
 ```
 
 ## 3. Confirm The Image Is Published
 
 Build and push the `prod` image from your local machine by following
-`LOCAL_DEVELOPMENT.md`.
+[local-development.md](local-development.md).
 
 On the VPS, confirm Docker can pull the production image:
 
@@ -436,16 +437,16 @@ docker compose -f docker-compose.web.yml --profile tools stop phpmyadmin
 docker compose -f docker-compose.web.yml --profile tools rm -f phpmyadmin
 ```
 
-## Troubleshooting Inquiry Saves
+## Troubleshooting Mark Saves
 
-If the site loads but submitting the inquiry form shows:
+If the site loads but submitting a mark eventually shows:
 
 ```text
-Error saving your inquiry. Please try again later.
+Error saving your mark. Please try again later.
 ```
 
-the web container can probably reach MySQL, but the `inquiries` table is missing
-or has an older shape. Copying `database/init.sql` to the database VPS does not
+the web container can probably reach MySQL, but the `marks` table is missing
+or has an older shape. Copying `database/migrations/` to the database VPS does not
 apply it after the MySQL volume already exists; you must run it against the
 database.
 
@@ -456,33 +457,34 @@ cd /opt/learningfullstack-db
 set -a
 . ./.env
 set +a
-sudo mysql "$DB_NAME" -e "SHOW TABLES; DESCRIBE inquiries;"
+sudo mysql "$DB_NAME" -e "SHOW TABLES; DESCRIBE marks;"
 ```
 
-If `inquiries` does not exist, initialize it:
+If `marks` does not exist, initialize it:
 
 ```bash
-sudo mysql "$DB_NAME" < database/init.sql
+cat database/migrations/*.sql | sudo mysql "$DB_NAME"
 ```
 
 Or create the table manually from a MySQL prompt:
 
 ```sql
-CREATE TABLE IF NOT EXISTS inquiries (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(255) NOT NULL,
-    message TEXT NOT NULL,
-    status ENUM('new', 'read', 'replied') NOT NULL DEFAULT 'new',
-    ip_address VARCHAR(45) NULL,
+CREATE TABLE IF NOT EXISTS marks (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    uid CHAR(36) NOT NULL,
+    x_percent DECIMAL(5,2) NOT NULL,
+    y_percent DECIMAL(5,2) NOT NULL,
+    display_name VARCHAR(80) NOT NULL,
+    message VARCHAR(280) NULL,
+    drawing LONGTEXT NULL,
+    color CHAR(7) NOT NULL,
+    shape ENUM('circle', 'square', 'diamond') NOT NULL DEFAULT 'circle',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_inquiries_ip_created_at
-ON inquiries (ip_address, created_at);
-
-CREATE INDEX idx_inquiries_status
-ON inquiries (status);
+CREATE UNIQUE INDEX uq_marks_uid ON marks (uid);
+CREATE INDEX idx_marks_created_at ON marks (created_at);
+CREATE INDEX idx_marks_position ON marks (x_percent, y_percent);
 ```
 
 If the table exists but is missing columns, inspect it with phpMyAdmin or run the

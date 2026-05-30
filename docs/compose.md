@@ -109,8 +109,8 @@ deploy:
 
 The `web` service intentionally has no `container_name`, because fixed container
 names prevent scaling. Traefik discovers the replicas through Docker labels and
-uses a sticky cookie so the current PHP file-based session behavior works across
-multiple web containers.
+uses a sticky cookie as a temporary bridge for PHP file-based sessions. See
+[session-strategy.md](session-strategy.md).
 
 Local development overrides this back to one replica in
 `docker-compose.override.yml` so the local `8080:80` port binding does not
