@@ -206,7 +206,6 @@ textarea:disabled {
     background: #f7f5ef;
     cursor: crosshair;
     touch-action: none;
-    --canvas-tile-display-size: 1024px;
     --canvas-pan-x: 0px;
     --canvas-pan-y: 0px;
     --canvas-zoom: 1;
@@ -274,23 +273,11 @@ textarea:disabled {
     width: var(--tile-width);
     height: var(--tile-height);
     border: 1px solid rgba(82, 73, 62, 0.08);
-    background-color: #fbfaf5;
-    background-image:
-        url("/assets/images/cave-wall-texture.png"),
+    background:
         linear-gradient(rgba(64, 58, 50, 0.06) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(64, 58, 50, 0.06) 1px, transparent 1px);
-    background-position:
-        center,
-        0 0,
-        0 0;
-    background-repeat:
-        no-repeat,
-        repeat,
-        repeat;
-    background-size:
-        min(100%, var(--canvas-tile-display-size)) min(100%, var(--canvas-tile-display-size)),
-        32px 32px,
-        32px 32px;
+        linear-gradient(90deg, rgba(64, 58, 50, 0.06) 1px, transparent 1px),
+        #fbfaf5;
+    background-size: 32px 32px;
 }
 
 .canvas-world::after {

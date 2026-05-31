@@ -17,10 +17,6 @@ Visitors can:
 The canvas starts with one tile and expands to a 3x3 area around newly saved
 marks without deleting existing marks.
 
-Canvas tile styling uses `src/assets/images/cave-wall-texture.png` as the first
-visual layer. Each tile caps that image at `1024px x 1024px`; if the image is
-missing, the current whiteboard grid remains underneath as the fallback.
-
 ## Important Files
 
 ```text
