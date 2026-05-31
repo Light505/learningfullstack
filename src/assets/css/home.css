@@ -210,8 +210,8 @@ textarea:disabled {
     --canvas-pan-x: 0px;
     --canvas-pan-y: 0px;
     --canvas-zoom: 1;
-    --canvas-world-width: 100%;
-    --canvas-world-height: 100%;
+    --canvas-world-width: var(--canvas-tile-display-size);
+    --canvas-world-height: var(--canvas-tile-display-size);
 }
 
 .mark-canvas[data-nav="pan"] {
@@ -288,7 +288,7 @@ textarea:disabled {
         repeat,
         repeat;
     background-size:
-        min(100%, var(--canvas-tile-display-size)) min(100%, var(--canvas-tile-display-size)),
+        100% 100%,
         32px 32px,
         32px 32px;
 }
