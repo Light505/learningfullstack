@@ -5,13 +5,13 @@ function mark_limits(): array
     return [
         'max_display_name' => 80,
         'max_message' => 280,
-        'max_drawing_bytes' => 12000,
-        'max_drawing_strokes' => 20,
-        'max_drawing_points' => 500,
+        'max_drawing_bytes' => null,
+        'max_drawing_strokes' => null,
+        'max_drawing_points' => null,
         'allowed_shapes' => ['circle', 'square', 'diamond'],
-        'min_distance_percent' => 4.5,
-        'min_coordinate_percent' => -300,
-        'max_coordinate_percent' => 300,
+        'min_distance_percent' => 46.08,
+        'min_coordinate_percent' => -102400,
+        'max_coordinate_percent' => 102400,
     ];
 }
 
@@ -103,7 +103,7 @@ function validate_drawing(string $drawing, array $limits): ?string
         return null;
     }
 
-    if (strlen($drawing) > $limits['max_drawing_bytes']) {
+    if ($limits['max_drawing_bytes'] !== null && strlen($drawing) > $limits['max_drawing_bytes']) {
         return 'Drawing is too large. Please keep it simple.';
     }
 
@@ -112,7 +112,7 @@ function validate_drawing(string $drawing, array $limits): ?string
         return 'Drawing data is invalid.';
     }
 
-    if (count($payload['strokes']) > $limits['max_drawing_strokes']) {
+    if ($limits['max_drawing_strokes'] !== null && count($payload['strokes']) > $limits['max_drawing_strokes']) {
         return 'Drawing has too many strokes. Please keep it simple.';
     }
 
@@ -123,12 +123,20 @@ function validate_drawing(string $drawing, array $limits): ?string
         }
 
         foreach ($stroke as $point) {
-            if (!is_array($point) || !isset($point['x'], $point['y']) || !is_numeric($point['x']) || !is_numeric($point['y'])) {
+            if (!is_array($point)) {
                 return 'Drawing data is invalid.';
             }
 
-            $x = (float) $point['x'];
-            $y = (float) $point['y'];
+            $uses_numeric_points = array_key_exists(0, $point) || array_key_exists(1, $point);
+            $x_value = $uses_numeric_points ? ($point[0] ?? null) : ($point['x'] ?? null);
+            $y_value = $uses_numeric_points ? ($point[1] ?? null) : ($point['y'] ?? null);
+
+            if (!is_numeric($x_value) || !is_numeric($y_value)) {
+                return 'Drawing data is invalid.';
+            }
+
+            $x = (float) $x_value;
+            $y = (float) $y_value;
             if ($x < 0 || $x > 100 || $y < 0 || $y > 100) {
                 return 'Drawing data is invalid.';
             }
@@ -137,7 +145,7 @@ function validate_drawing(string $drawing, array $limits): ?string
         }
     }
 
-    if ($point_count > $limits['max_drawing_points']) {
+    if ($limits['max_drawing_points'] !== null && $point_count > $limits['max_drawing_points']) {
         return 'Drawing has too many points. Please keep it simple.';
     }
 

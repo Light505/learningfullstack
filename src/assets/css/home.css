@@ -209,8 +209,8 @@ textarea:disabled {
     --canvas-pan-x: 0px;
     --canvas-pan-y: 0px;
     --canvas-zoom: 1;
-    --canvas-world-width: 100%;
-    --canvas-world-height: 100%;
+    --canvas-world-width: 1024px;
+    --canvas-world-height: 1024px;
 }
 
 .mark-canvas[data-nav="pan"] {
@@ -239,23 +239,25 @@ textarea:disabled {
     cursor: grabbing;
 }
 
-.mark-canvas::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background-image:
-        radial-gradient(circle, rgba(81, 70, 58, 0.18) 1px, transparent 1.3px);
-    background-size: 24px 24px;
-}
-
 .canvas-world {
     position: absolute;
     left: 0;
     top: 0;
     width: var(--canvas-world-width);
     height: var(--canvas-world-height);
-    background: #fbfaf5;
+    background-color: #fbfaf5;
+    background-image:
+        url("/assets/images/cave-wall-texture.png"),
+        radial-gradient(circle, rgba(81, 70, 58, 0.18) 1px, transparent 1.3px),
+        linear-gradient(rgba(64, 58, 50, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(64, 58, 50, 0.06) 1px, transparent 1px);
+    background-position: 0 0;
+    background-repeat: repeat;
+    background-size:
+        1024px 1024px,
+        24px 24px,
+        32px 32px,
+        32px 32px;
     transform: translate(var(--canvas-pan-x), var(--canvas-pan-y)) scale(var(--canvas-zoom));
     transform-origin: 0 0;
 }
@@ -272,12 +274,28 @@ textarea:disabled {
     top: var(--tile-top);
     width: var(--tile-width);
     height: var(--tile-height);
-    border: 1px solid rgba(82, 73, 62, 0.08);
+    border: 0;
+    background: transparent;
+}
+
+.canvas-tile.is-unavailable {
+    filter: saturate(0.52) brightness(0.82);
+}
+
+.canvas-tile.is-unavailable::before {
+    content: "";
+    position: absolute;
+    inset: 0;
     background:
-        linear-gradient(rgba(64, 58, 50, 0.06) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(64, 58, 50, 0.06) 1px, transparent 1px),
-        #fbfaf5;
-    background-size: 32px 32px;
+        repeating-linear-gradient(
+            -45deg,
+            rgba(47, 42, 34, 0.12) 0,
+            rgba(47, 42, 34, 0.12) 2px,
+            transparent 2px,
+            transparent 18px
+        ),
+        rgba(47, 42, 34, 0.18);
+    pointer-events: none;
 }
 
 .canvas-world::after {
@@ -365,6 +383,12 @@ textarea:disabled {
     cursor: pointer;
     outline: 0;
     transition: transform 160ms ease, filter 160ms ease;
+}
+
+.mark-canvas.is-map-view .mark-dot,
+.mark-canvas.is-map-view .placement-marker {
+    opacity: 0;
+    pointer-events: none;
 }
 
 .mark-dot::before {
@@ -667,6 +691,18 @@ textarea {
     font-weight: 700;
 }
 
+.drawing-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.drawing-clear-row {
+    display: flex;
+    justify-content: flex-end;
+}
+
 .mini-button {
     min-height: 30px;
     padding: 4px 10px;
@@ -682,12 +718,31 @@ textarea {
     box-shadow: 0 5px 12px rgba(47, 42, 34, 0.12);
 }
 
+.mini-button.active {
+    background: #2f2a22;
+    color: #fff8eb;
+}
+
+.mini-button:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+}
+
+.mini-button.danger {
+    color: #8b3329;
+}
+
+.drawing-pad {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(61, 48, 36, 0.18);
+    border-radius: 8px;
+}
+
 .drawing-canvas {
     display: block;
     width: 100%;
     aspect-ratio: 2 / 1;
-    border: 1px solid rgba(61, 48, 36, 0.18);
-    border-radius: 8px;
     background:
         linear-gradient(rgba(64, 58, 50, 0.06) 1px, transparent 1px),
         linear-gradient(90deg, rgba(64, 58, 50, 0.06) 1px, transparent 1px),
@@ -695,6 +750,25 @@ textarea {
     background-size: 24px 24px;
     cursor: crosshair;
     touch-action: none;
+}
+
+.drawing-canvas[data-mode="erase"] {
+    cursor: none;
+}
+
+.drawing-eraser-indicator {
+    position: absolute;
+    left: var(--eraser-x, 0px);
+    top: var(--eraser-y, 0px);
+    width: var(--eraser-size, 22px);
+    height: var(--eraser-size, 22px);
+    border: 2px solid rgba(47, 42, 34, 0.72);
+    border-radius: 999px;
+    background: rgba(255, 250, 241, 0.34);
+    box-shadow: 0 0 0 3px rgba(255, 250, 241, 0.5);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    z-index: 1;
 }
 
 .mark-form fieldset {

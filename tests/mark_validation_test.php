@@ -8,11 +8,24 @@ $valid = [
     'display_name' => 'Lighthal',
     'message' => 'I was here.',
     'drawing' => '',
-    'x_percent' => 42.5,
-    'y_percent' => 61.25,
+    'x_percent' => 420.5,
+    'y_percent' => 610.25,
     'color' => '#f0b35a',
     'shape' => 'circle',
 ];
+
+$detailed_drawing_strokes = [];
+for ($stroke_index = 0; $stroke_index < 30; $stroke_index++) {
+    $stroke = [];
+    for ($point_index = 0; $point_index < 600; $point_index++) {
+        $stroke[] = [
+            round(($point_index % 100) + 0.1, 1),
+            round(($stroke_index * 2.4) + (($point_index % 9) * 0.1), 1),
+        ];
+    }
+    $detailed_drawing_strokes[] = $stroke;
+}
+$detailed_drawing = json_encode(['v' => 1, 'strokes' => $detailed_drawing_strokes]);
 
 $cases = [
     'valid mark passes' => [
@@ -32,19 +45,19 @@ $cases = [
         'expected' => 'Message must be less than 280 characters.',
     ],
     'expanded x position is allowed' => [
-        'input' => array_merge($valid, ['x_percent' => 150.5]),
+        'input' => array_merge($valid, ['x_percent' => 99000.5]),
         'expected' => null,
     ],
     'negative expanded y position is allowed' => [
-        'input' => array_merge($valid, ['y_percent' => -150.5]),
+        'input' => array_merge($valid, ['y_percent' => -99000.5]),
         'expected' => null,
     ],
     'x position is bounded' => [
-        'input' => array_merge($valid, ['x_percent' => 300.5]),
+        'input' => array_merge($valid, ['x_percent' => 102400.5]),
         'expected' => 'Mark X position must be within the canvas bounds.',
     ],
     'y position is bounded' => [
-        'input' => array_merge($valid, ['y_percent' => -300.5]),
+        'input' => array_merge($valid, ['y_percent' => -102400.5]),
         'expected' => 'Mark Y position must be within the canvas bounds.',
     ],
     'color must be hex' => [
@@ -63,9 +76,13 @@ $cases = [
         'input' => array_merge($valid, ['message' => '', 'drawing' => '{"v":1,"strokes":[[{"x":10,"y":10},{"x":30,"y":40}]]}']),
         'expected' => null,
     ],
-    'drawing size is checked' => [
-        'input' => array_merge($valid, ['drawing' => str_repeat('x', 12001)]),
-        'expected' => 'Drawing is too large. Please keep it simple.',
+    'compact drawing points are accepted' => [
+        'input' => array_merge($valid, ['message' => '', 'drawing' => '{"v":1,"strokes":[[[10,10],[30,40]]]}']),
+        'expected' => null,
+    ],
+    'sophisticated drawing is accepted' => [
+        'input' => array_merge($valid, ['message' => '', 'drawing' => $detailed_drawing]),
+        'expected' => null,
     ],
     'drawing coordinates are bounded' => [
         'input' => array_merge($valid, ['drawing' => '{"v":1,"strokes":[[{"x":101,"y":10}]]}']),

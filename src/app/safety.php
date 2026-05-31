@@ -83,28 +83,3 @@ function validate_spam_content(array $input): ?string
     return null;
 }
 
-function assert_not_recent_duplicate(PDO $pdo, array $input): void
-{
-    $display_name = trim($input['display_name'] ?? '');
-    $message = trim($input['message'] ?? '');
-
-    if ($display_name === '' || $message === '') {
-        return;
-    }
-
-    $stmt = $pdo->prepare(
-        'SELECT COUNT(*)
-        FROM marks
-        WHERE display_name = :display_name
-            AND message = :message
-            AND created_at >= (NOW() - INTERVAL 10 MINUTE)'
-    );
-    $stmt->execute([
-        ':display_name' => $display_name,
-        ':message' => $message,
-    ]);
-
-    if ((int) $stmt->fetchColumn() > 0) {
-        throw new InvalidArgumentException('That same mark was already left recently.');
-    }
-}

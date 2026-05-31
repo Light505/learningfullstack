@@ -15,6 +15,10 @@ const yField = document.querySelector("[data-y-field]");
 const drawingField = document.querySelector("[data-drawing-field]");
 const drawingCanvas = document.querySelector("[data-drawing-canvas]");
 const drawingClear = document.querySelector("[data-drawing-clear]");
+const drawingUndo = document.querySelector("[data-drawing-undo]");
+const drawingPen = document.querySelector("[data-drawing-pen]");
+const drawingEraser = document.querySelector("[data-drawing-eraser]");
+const drawingEraserIndicator = document.querySelector("[data-drawing-eraser-indicator]");
 const colorInputs = Array.from(document.querySelectorAll('input[name="color"]'));
 const placementNote = document.querySelector("[data-placement-note]");
 const formStatus = document.querySelector("[data-form-status]");
@@ -23,6 +27,8 @@ const randomButton = document.querySelector("[data-random-button]");
 const zoomInButton = document.querySelector("[data-zoom-in-button]");
 const zoomOutButton = document.querySelector("[data-zoom-out-button]");
 const resetViewButton = document.querySelector("[data-reset-view-button]");
+const fitWorldButton = document.querySelector("[data-fit-world-button]");
+const exportWorldButton = document.querySelector("[data-export-world-button]");
 const focusLatestButton = document.querySelector("[data-focus-latest-button]");
 const undoButton = document.querySelector("[data-undo-button]");
 const placementMarker = document.querySelector("[data-placement-marker]");
@@ -33,17 +39,19 @@ const recentTotal = document.querySelector("[data-recent-total]");
 const recentList = document.querySelector("[data-recent-list]");
 const toastRegion = document.querySelector("[data-toast-region]");
 const minDistance = Number.parseFloat(canvas?.dataset.minDistance || "0");
-const minCoordinate = Number.parseFloat(canvas?.dataset.minCoordinate || "-300");
-const maxCoordinate = Number.parseFloat(canvas?.dataset.maxCoordinate || "300");
+const minCoordinate = Number.parseFloat(canvas?.dataset.minCoordinate || "-102400");
+const maxCoordinate = Number.parseFloat(canvas?.dataset.maxCoordinate || "102400");
 let drawingStrokes = [];
 let activeStroke = null;
+let drawingMode = "draw";
 let liveSyncReady = false;
 let activeTool = "place";
 let canvasView = { zoom: 1, panX: 0, panY: 0 };
 let panStart = null;
 let keyboardPanActive = false;
 let suppressNextCanvasClick = false;
-const tileSize = 100;
+const tileSize = 1024;
+const eraserRadius = 4.5;
 const committedTiles = new Set(["0,0"]);
 let worldBounds = { minX: 0, maxX: tileSize, minY: 0, maxY: tileSize };
 let viewAnimation = null;
@@ -70,21 +78,62 @@ function clampCanvasView() {
         return;
     }
 
-    const rect = canvas.getBoundingClientRect();
-    const worldWidth = rect.width * (worldBounds.maxX - worldBounds.minX) / tileSize;
-    const worldHeight = rect.height * (worldBounds.maxY - worldBounds.minY) / tileSize;
-    const minPanX = Math.min(0, rect.width - (worldWidth * canvasView.zoom));
-    const minPanY = Math.min(0, rect.height - (worldHeight * canvasView.zoom));
-    const maxPanX = Math.max(0, -worldBounds.minX / tileSize * rect.width * canvasView.zoom);
-    const maxPanY = Math.max(0, -worldBounds.minY / tileSize * rect.height * canvasView.zoom);
+    canvasView = clampedCanvasView(canvasView);
+}
 
-    canvasView.panX = Math.max(minPanX, Math.min(maxPanX, canvasView.panX));
-    canvasView.panY = Math.max(minPanY, Math.min(maxPanY, canvasView.panY));
+function canvasPanBounds() {
+    if (!canvas) {
+        return { minPanX: 0, maxPanX: 0, minPanY: 0, maxPanY: 0 };
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const worldWidth = worldBounds.maxX - worldBounds.minX;
+    const worldHeight = worldBounds.maxY - worldBounds.minY;
+    const scaledWorldWidth = worldWidth * canvasView.zoom;
+    const scaledWorldHeight = worldHeight * canvasView.zoom;
+
+    if (scaledWorldWidth <= rect.width && scaledWorldHeight <= rect.height) {
+        return {
+            minPanX: (rect.width - scaledWorldWidth) / 2,
+            maxPanX: (rect.width - scaledWorldWidth) / 2,
+            minPanY: (rect.height - scaledWorldHeight) / 2,
+            maxPanY: (rect.height - scaledWorldHeight) / 2,
+        };
+    }
+
+    return {
+        minPanX: Math.min(0, rect.width - scaledWorldWidth),
+        maxPanX: 0,
+        minPanY: Math.min(0, rect.height - scaledWorldHeight),
+        maxPanY: 0,
+    };
+}
+
+function clampedCanvasView(view) {
+    const { minPanX, maxPanX, minPanY, maxPanY } = canvasPanBounds();
+
+    return {
+        ...view,
+        panX: Math.max(minPanX, Math.min(maxPanX, view.panX)),
+        panY: Math.max(minPanY, Math.min(maxPanY, view.panY)),
+    };
+}
+
+function rubberbandPan(value, min, max) {
+    if (value < min) {
+        return min + ((value - min) * 0.32);
+    }
+
+    if (value > max) {
+        return max + ((value - max) * 0.32);
+    }
+
+    return value;
 }
 
 function updateWorldBounds() {
     const previousBounds = { ...worldBounds };
-    const tiles = Array.from(committedTiles).map((key) => {
+    const tiles = Array.from(visibleTileKeys()).map((key) => {
         const [tileX, tileY] = key.split(",").map(Number);
         return { tileX, tileY };
     });
@@ -96,10 +145,14 @@ function updateWorldBounds() {
         maxY: (Math.max(...tiles.map((tile) => tile.tileY)) + 1) * tileSize,
     };
 
-    if (previousBounds.minX !== worldBounds.minX
+    const boundsChanged = previousBounds.minX !== worldBounds.minX
         || previousBounds.maxX !== worldBounds.maxX
         || previousBounds.minY !== worldBounds.minY
-        || previousBounds.maxY !== worldBounds.maxY) {
+        || previousBounds.maxY !== worldBounds.maxY;
+
+    if (boundsChanged) {
+        canvasView.panX += (worldBounds.minX - previousBounds.minX) * canvasView.zoom;
+        canvasView.panY += (worldBounds.minY - previousBounds.minY) * canvasView.zoom;
         geometryDirty = true;
     }
 }
@@ -119,6 +172,22 @@ function commitTileBandForCoordinate(x, y) {
     }
 }
 
+function visibleTileKeys() {
+    const tiles = new Set();
+
+    committedTiles.forEach((key) => {
+        const [tileX, tileY] = key.split(",").map(Number);
+
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+            for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+                tiles.add(`${tileX + offsetX},${tileY + offsetY}`);
+            }
+        }
+    });
+
+    return tiles;
+}
+
 function tileKeyForCoordinate(x, y) {
     return `${Math.floor(x / tileSize)},${Math.floor(y / tileSize)}`;
 }
@@ -127,8 +196,28 @@ function isCommittedCoordinate(x, y) {
     return committedTiles.has(tileKeyForCoordinate(x, y));
 }
 
+function isTileInsideCoordinateBounds(tileX, tileY) {
+    const tileLeft = tileX * tileSize;
+    const tileTop = tileY * tileSize;
+    const tileRight = tileLeft + tileSize;
+    const tileBottom = tileTop + tileSize;
+
+    return tileLeft >= minCoordinate
+        && tileTop >= minCoordinate
+        && tileRight <= maxCoordinate
+        && tileBottom <= maxCoordinate;
+}
+
+function isPlaceableTile(tileX, tileY) {
+    return committedTiles.has(`${tileX},${tileY}`) && isTileInsideCoordinateBounds(tileX, tileY);
+}
+
 function randomCoordinateInCommittedTiles() {
-    const tileKeys = Array.from(committedTiles);
+    const tileKeys = Array.from(committedTiles).filter((key) => {
+        const [tileX, tileY] = key.split(",").map(Number);
+
+        return isTileInsideCoordinateBounds(tileX, tileY);
+    });
     const [tileX, tileY] = tileKeys[Math.floor(Math.random() * tileKeys.length)].split(",").map(Number);
 
     return {
@@ -142,27 +231,38 @@ function renderCanvasTiles() {
         return;
     }
 
-    const tileSignature = Array.from(committedTiles).sort().join("|");
+    const tileSignature = [
+        Array.from(committedTiles).sort().join("|"),
+        Array.from(visibleTileKeys()).sort().join("|"),
+    ].join("::");
     if (tileSignature === renderedTileSignature) {
         return;
     }
 
     renderedTileSignature = tileSignature;
     canvasTiles.innerHTML = "";
-    const width = worldBounds.maxX - worldBounds.minX;
-    const height = worldBounds.maxY - worldBounds.minY;
+    const minTileX = worldBounds.minX / tileSize;
+    const maxTileX = (worldBounds.maxX / tileSize) - 1;
+    const minTileY = worldBounds.minY / tileSize;
+    const maxTileY = (worldBounds.maxY / tileSize) - 1;
 
-    Array.from(committedTiles).forEach((key) => {
-        const [tileX, tileY] = key.split(",").map(Number);
-        const tile = document.createElement("span");
-        tile.className = "canvas-tile";
-        tile.style.setProperty("--tile-left", `${((tileX * tileSize - worldBounds.minX) / width) * 100}%`);
-        tile.style.setProperty("--tile-top", `${((tileY * tileSize - worldBounds.minY) / height) * 100}%`);
-        tile.style.setProperty("--tile-width", `${(tileSize / width) * 100}%`);
-        tile.style.setProperty("--tile-height", `${(tileSize / height) * 100}%`);
-        tile.style.setProperty("--tile-shade", `${Math.abs((tileX * 17) + (tileY * 31)) % 7}`);
-        canvasTiles.appendChild(tile);
-    });
+    for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+        for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+            const key = `${tileX},${tileY}`;
+            const tile = document.createElement("span");
+            tile.className = isPlaceableTile(tileX, tileY)
+                ? "canvas-tile is-committed"
+                : "canvas-tile is-unavailable";
+            tile.style.setProperty("--tile-left", `${tileX * tileSize - worldBounds.minX}px`);
+            tile.style.setProperty("--tile-top", `${tileY * tileSize - worldBounds.minY}px`);
+            tile.style.setProperty("--tile-width", `${tileSize}px`);
+            tile.style.setProperty("--tile-height", `${tileSize}px`);
+            tile.style.setProperty("--tile-bg-x", `${-(tileX * tileSize)}px`);
+            tile.style.setProperty("--tile-bg-y", `${-(tileY * tileSize)}px`);
+            tile.style.setProperty("--tile-shade", `${Math.abs((tileX * 17) + (tileY * 31)) % 7}`);
+            canvasTiles.appendChild(tile);
+        }
+    }
 }
 
 function applyWorldGeometry() {
@@ -170,8 +270,8 @@ function applyWorldGeometry() {
         return;
     }
 
-    canvas.style.setProperty("--canvas-world-width", `${worldBounds.maxX - worldBounds.minX}%`);
-    canvas.style.setProperty("--canvas-world-height", `${worldBounds.maxY - worldBounds.minY}%`);
+    canvas.style.setProperty("--canvas-world-width", `${worldBounds.maxX - worldBounds.minX}px`);
+    canvas.style.setProperty("--canvas-world-height", `${worldBounds.maxY - worldBounds.minY}px`);
     renderCanvasTiles();
 }
 
@@ -201,8 +301,8 @@ function positionPlacementMarker() {
         const rect = canvas.getBoundingClientRect();
         const x = Number.parseFloat(xField.value);
         const y = Number.parseFloat(yField.value);
-        const screenX = canvasView.panX + (((x - worldBounds.minX) / tileSize) * rect.width * canvasView.zoom);
-        const screenY = canvasView.panY + (((y - worldBounds.minY) / tileSize) * rect.height * canvasView.zoom);
+        const screenX = canvasView.panX + ((x - worldBounds.minX) * canvasView.zoom);
+        const screenY = canvasView.panY + ((y - worldBounds.minY) * canvasView.zoom);
 
         placementMarker.style.setProperty("--placement-x", `${(screenX / rect.width) * 100}%`);
         placementMarker.style.setProperty("--placement-y", `${(screenY / rect.height) * 100}%`);
@@ -221,8 +321,11 @@ function rebuildMarkPositionCache() {
     marks.forEach(cacheMarkPosition);
 }
 
-function applyCanvasView() {
-    clampCanvasView();
+function applyCanvasView(options = {}) {
+    const shouldClamp = options.clamp !== false;
+    if (shouldClamp) {
+        clampCanvasView();
+    }
     if (!canvas) {
         return;
     }
@@ -236,6 +339,7 @@ function applyCanvasView() {
     canvas.style.setProperty("--canvas-pan-x", `${canvasView.panX}px`);
     canvas.style.setProperty("--canvas-pan-y", `${canvasView.panY}px`);
     canvas.style.setProperty("--canvas-zoom", String(canvasView.zoom));
+    canvas.classList.toggle("is-map-view", canvasView.zoom < 0.32);
 }
 
 function commitTilesForMarks(markItems) {
@@ -276,18 +380,25 @@ function easeOutCubic(progress) {
     return 1 - Math.pow(1 - progress, 3);
 }
 
-function animateCanvasViewTo(nextView, duration = 520) {
+function cancelCanvasViewAnimation() {
+    if (!viewAnimation) {
+        return;
+    }
+
+    window.cancelAnimationFrame(viewAnimation);
+    viewAnimation = null;
+}
+
+function animateCanvasViewTo(nextView, duration = 520, options = {}) {
     if (!canvas) {
         return;
     }
 
-    if (viewAnimation) {
-        window.cancelAnimationFrame(viewAnimation);
-    }
+    cancelCanvasViewAnimation();
 
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         canvasView = nextView;
-        applyCanvasView();
+        applyCanvasView(options);
         return;
     }
 
@@ -303,18 +414,28 @@ function animateCanvasViewTo(nextView, duration = 520) {
             panX: startView.panX + ((nextView.panX - startView.panX) * eased),
             panY: startView.panY + ((nextView.panY - startView.panY) * eased),
         };
-        applyCanvasView();
+        applyCanvasView(options);
 
         if (progress < 1) {
             viewAnimation = window.requestAnimationFrame(step);
         } else {
             viewAnimation = null;
             canvasView = nextView;
-            applyCanvasView();
+            applyCanvasView(options);
         }
     };
 
     viewAnimation = window.requestAnimationFrame(step);
+}
+
+function settleCanvasView() {
+    const nextView = clampedCanvasView(canvasView);
+
+    if (nextView.panX === canvasView.panX && nextView.panY === canvasView.panY) {
+        return;
+    }
+
+    animateCanvasViewTo(nextView, 360, { clamp: false });
 }
 
 function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
@@ -327,9 +448,41 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
 
     animateCanvasViewTo({
         zoom,
-        panX: (rect.width / 2) - (((x - worldBounds.minX) / tileSize) * rect.width * zoom),
-        panY: (rect.height / 2) - (((y - worldBounds.minY) / tileSize) * rect.height * zoom),
+        panX: (rect.width / 2) - ((x - worldBounds.minX) * zoom),
+        panY: (rect.height / 2) - ((y - worldBounds.minY) * zoom),
     });
+}
+
+function fitWorldZoom() {
+    if (!canvas) {
+        return 1;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const worldWidth = worldBounds.maxX - worldBounds.minX;
+    const worldHeight = worldBounds.maxY - worldBounds.minY;
+    const padding = 36;
+    const availableWidth = Math.max(1, rect.width - (padding * 2));
+    const availableHeight = Math.max(1, rect.height - (padding * 2));
+
+    return Math.min(1, availableWidth / worldWidth, availableHeight / worldHeight);
+}
+
+function fitWorldView() {
+    if (!canvas) {
+        return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const worldWidth = worldBounds.maxX - worldBounds.minX;
+    const worldHeight = worldBounds.maxY - worldBounds.minY;
+    const zoom = fitWorldZoom();
+
+    animateCanvasViewTo({
+        zoom,
+        panX: (rect.width - (worldWidth * zoom)) / 2,
+        panY: (rect.height - (worldHeight * zoom)) / 2,
+    }, 520, { clamp: false });
 }
 
 function zoomCanvas(delta) {
@@ -337,9 +490,10 @@ function zoomCanvas(delta) {
         return;
     }
 
+    cancelCanvasViewAnimation();
     const rect = canvas.getBoundingClientRect();
     const oldZoom = canvasView.zoom;
-    const nextZoom = Math.max(1, Math.min(2.4, Number((oldZoom + delta).toFixed(2))));
+    const nextZoom = Math.max(fitWorldZoom(), Math.min(2.4, Number((oldZoom + delta).toFixed(2))));
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
     const worldX = (centerX - canvasView.panX) / oldZoom;
@@ -356,30 +510,111 @@ function resetCanvasView() {
         return;
     }
 
-    const rect = canvas.getBoundingClientRect();
+    cancelCanvasViewAnimation();
     canvasView = {
         zoom: 1,
-        panX: (worldBounds.minX / tileSize) * rect.width,
-        panY: (worldBounds.minY / tileSize) * rect.height,
+        panX: worldBounds.minX,
+        panY: worldBounds.minY,
     };
     applyCanvasView();
+}
+
+function svgEscape(value) {
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+}
+
+function markShapeSvg(mark, x, y) {
+    const color = mark.style.getPropertyValue("--mark-color") || "#d9826b";
+    const shape = mark.classList.contains("square")
+        ? "square"
+        : mark.classList.contains("diamond")
+            ? "diamond"
+            : "circle";
+
+    if (shape === "square") {
+        return `<rect x="${x - 14}" y="${y - 14}" width="28" height="28" rx="4" fill="${svgEscape(color)}" stroke="#fff8eb" stroke-width="3" />`;
+    }
+
+    if (shape === "diamond") {
+        return `<rect x="${x - 14}" y="${y - 14}" width="28" height="28" rx="4" transform="rotate(45 ${x} ${y})" fill="${svgEscape(color)}" stroke="#fff8eb" stroke-width="3" />`;
+    }
+
+    return `<circle cx="${x}" cy="${y}" r="14" fill="${svgEscape(color)}" stroke="#fff8eb" stroke-width="3" />`;
+}
+
+function exportWorldSvg() {
+    if (!canvas) {
+        return;
+    }
+
+    applyWorldGeometry();
+    const width = worldBounds.maxX - worldBounds.minX;
+    const height = worldBounds.maxY - worldBounds.minY;
+    const tiles = Array.from(document.querySelectorAll(".canvas-tile"));
+    const tileSvg = tiles.map((tile) => {
+        const x = Number.parseFloat(tile.style.getPropertyValue("--tile-left")) || 0;
+        const y = Number.parseFloat(tile.style.getPropertyValue("--tile-top")) || 0;
+        const unavailable = tile.classList.contains("is-unavailable");
+        const shade = unavailable
+            ? `<rect x="${x}" y="${y}" width="${tileSize}" height="${tileSize}" fill="#2f2a22" opacity="0.2" />`
+            : "";
+
+        return [
+            `<rect x="${x}" y="${y}" width="${tileSize}" height="${tileSize}" fill="#fbfaf5" stroke="#52493e" stroke-opacity="0.18" stroke-width="1" />`,
+            `<image href="/assets/images/cave-wall-texture.png" x="${x}" y="${y}" width="${tileSize}" height="${tileSize}" preserveAspectRatio="none" opacity="0.55" />`,
+            `<path d="M ${x} ${y} h ${tileSize} v ${tileSize} h -${tileSize} Z" fill="url(#grid)" />`,
+            shade,
+        ].join("");
+    }).join("");
+    const markSvg = marks.map((mark) => {
+        const markX = Number.parseFloat(mark.dataset.x || "0") - worldBounds.minX;
+        const markY = Number.parseFloat(mark.dataset.y || "0") - worldBounds.minY;
+        const label = svgEscape(mark.dataset.name || "Mark");
+
+        return `<g data-uid="${svgEscape(mark.dataset.uid || "")}" aria-label="${label}">${markShapeSvg(mark, markX, markY)}<title>${label}</title></g>`;
+    }).join("");
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Exported mark world">
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 H 0 V 32" fill="none" stroke="#403a32" stroke-opacity="0.12" stroke-width="1" />
+      <circle cx="16" cy="16" r="1.2" fill="#51463a" opacity="0.18" />
+    </pattern>
+  </defs>
+  <rect width="${width}" height="${height}" fill="#f7f5ef" />
+  ${tileSvg}
+  ${markSvg}
+</svg>`;
+    const blob = new Blob([svg], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mark-world-${new Date().toISOString().slice(0, 10)}.svg`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function canvasPointFromEvent(event) {
     const rect = canvas.getBoundingClientRect();
     return {
-        x: worldBounds.minX + ((((event.clientX - rect.left - canvasView.panX) / canvasView.zoom) / rect.width) * tileSize),
-        y: worldBounds.minY + ((((event.clientY - rect.top - canvasView.panY) / canvasView.zoom) / rect.height) * tileSize),
+        x: worldBounds.minX + ((event.clientX - rect.left - canvasView.panX) / canvasView.zoom),
+        y: worldBounds.minY + ((event.clientY - rect.top - canvasView.panY) / canvasView.zoom),
     };
 }
 
 function visibleWorldBounds() {
     const rect = canvas.getBoundingClientRect();
     return {
-        minX: Math.max(minCoordinate, worldBounds.minX + (((0 - canvasView.panX) / canvasView.zoom / rect.width) * tileSize)),
-        maxX: Math.min(maxCoordinate, worldBounds.minX + (((rect.width - canvasView.panX) / canvasView.zoom / rect.width) * tileSize)),
-        minY: Math.max(minCoordinate, worldBounds.minY + (((0 - canvasView.panY) / canvasView.zoom / rect.height) * tileSize)),
-        maxY: Math.min(maxCoordinate, worldBounds.minY + (((rect.height - canvasView.panY) / canvasView.zoom / rect.height) * tileSize)),
+        minX: Math.max(minCoordinate, worldBounds.minX + ((0 - canvasView.panX) / canvasView.zoom)),
+        maxX: Math.min(maxCoordinate, worldBounds.minX + ((rect.width - canvasView.panX) / canvasView.zoom)),
+        minY: Math.max(minCoordinate, worldBounds.minY + ((0 - canvasView.panY) / canvasView.zoom)),
+        maxY: Math.min(maxCoordinate, worldBounds.minY + ((rect.height - canvasView.panY) / canvasView.zoom)),
     };
 }
 
@@ -507,7 +742,7 @@ function setPlacement(x, y) {
         submitButton.textContent = "Place mark";
     }
     placementNote.classList.remove("error");
-    placementNote.textContent = `Selected spot: ${xField.value}%, ${yField.value}%`;
+    placementNote.textContent = `Selected spot: ${xField.value}px, ${yField.value}px`;
     return true;
 }
 
@@ -668,10 +903,19 @@ function drawingToPaths(drawing) {
 
         return payload.strokes
             .filter((stroke) => Array.isArray(stroke) && stroke.length > 0)
-            .map((stroke) => stroke.map((point) => ({
-                x: Number(point.x),
-                y: Number(point.y),
-            })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)));
+            .map((stroke) => stroke.map((point) => {
+                if (Array.isArray(point)) {
+                    return {
+                        x: Number(point[0]),
+                        y: Number(point[1]),
+                    };
+                }
+
+                return {
+                    x: Number(point.x),
+                    y: Number(point.y),
+                };
+            }).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)));
     } catch (_error) {
         return [];
     }
@@ -819,16 +1063,25 @@ function updateDrawingField() {
     }
 
     const cleanStrokes = drawingStrokes
-        .map((stroke) => stroke.slice(0, 500).map((point) => ({
-            x: Number(point.x.toFixed(2)),
-            y: Number(point.y.toFixed(2)),
-        })))
-        .filter((stroke) => stroke.length > 0)
-        .slice(0, 20);
+        .map((stroke) => stroke.map((point) => [
+            Number(point.x.toFixed(1)),
+            Number(point.y.toFixed(1)),
+        ]))
+        .filter((stroke) => stroke.length > 0);
 
     drawingField.value = cleanStrokes.length > 0
         ? JSON.stringify({ v: 1, strokes: cleanStrokes })
         : "";
+    updateDrawingControls();
+}
+
+function updateDrawingControls() {
+    if (drawingUndo) {
+        drawingUndo.disabled = drawingStrokes.length === 0;
+    }
+    if (drawingClear) {
+        drawingClear.disabled = drawingStrokes.length === 0;
+    }
 }
 
 function renderDrawingCanvas() {
@@ -870,6 +1123,166 @@ function drawingPointFromEvent(event) {
     };
 }
 
+function updateEraserIndicator(event) {
+    if (!drawingCanvas || !drawingEraserIndicator) {
+        return;
+    }
+
+    const rect = drawingCanvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+    const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+    const size = (eraserRadius / 100) * rect.width * 2;
+
+    drawingEraserIndicator.style.setProperty("--eraser-x", `${x}px`);
+    drawingEraserIndicator.style.setProperty("--eraser-y", `${y}px`);
+    drawingEraserIndicator.style.setProperty("--eraser-size", `${size}px`);
+    drawingEraserIndicator.hidden = drawingMode !== "erase";
+}
+
+function setDrawingMode(nextMode) {
+    drawingMode = nextMode;
+    activeStroke = null;
+    drawingPen?.classList.toggle("active", drawingMode === "draw");
+    drawingEraser?.classList.toggle("active", drawingMode === "erase");
+    if (drawingCanvas) {
+        drawingCanvas.dataset.mode = drawingMode;
+    }
+    if (drawingEraserIndicator) {
+        drawingEraserIndicator.hidden = drawingMode !== "erase";
+    }
+}
+
+function distanceToSegment(point, start, end) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+
+    if (dx === 0 && dy === 0) {
+        return Math.hypot(point.x - start.x, point.y - start.y);
+    }
+
+    const progress = Math.max(0, Math.min(1, (((point.x - start.x) * dx) + ((point.y - start.y) * dy)) / ((dx * dx) + (dy * dy))));
+    const x = start.x + (dx * progress);
+    const y = start.y + (dy * progress);
+
+    return Math.hypot(point.x - x, point.y - y);
+}
+
+function pointAtSegmentProgress(start, end, progress) {
+    return {
+        x: start.x + ((end.x - start.x) * progress),
+        y: start.y + ((end.y - start.y) * progress),
+    };
+}
+
+function outsideCircleIntervals(start, end, center, radius) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const fx = start.x - center.x;
+    const fy = start.y - center.y;
+    const a = (dx * dx) + (dy * dy);
+
+    if (a === 0) {
+        return Math.hypot(fx, fy) <= radius ? [] : [[0, 1]];
+    }
+
+    const b = 2 * ((fx * dx) + (fy * dy));
+    const c = (fx * fx) + (fy * fy) - (radius * radius);
+    const discriminant = (b * b) - (4 * a * c);
+
+    if (discriminant <= 0) {
+        return distanceToSegment(center, start, end) <= radius ? [] : [[0, 1]];
+    }
+
+    const root = Math.sqrt(discriminant);
+    const enter = Math.max(0, Math.min(1, (-b - root) / (2 * a)));
+    const exit = Math.max(0, Math.min(1, (-b + root) / (2 * a)));
+
+    if (exit <= 0 || enter >= 1) {
+        return [[0, 1]];
+    }
+
+    return [
+        [0, enter],
+        [exit, 1],
+    ].filter(([startProgress, endProgress]) => endProgress - startProgress > 0.001);
+}
+
+function pushPointIfDifferent(stroke, point) {
+    const lastPoint = stroke[stroke.length - 1];
+    if (lastPoint && Math.abs(lastPoint.x - point.x) < 0.001 && Math.abs(lastPoint.y - point.y) < 0.001) {
+        return;
+    }
+
+    stroke.push(point);
+}
+
+function eraseStrokeAtPoint(stroke, point, radius = eraserRadius) {
+    if (stroke.length === 1) {
+        return Math.hypot(stroke[0].x - point.x, stroke[0].y - point.y) <= radius
+            ? { pieces: [], changed: true }
+            : { pieces: [stroke], changed: false };
+    }
+
+    const pieces = [];
+    let currentPiece = [];
+    let changed = false;
+
+    for (let index = 1; index < stroke.length; index += 1) {
+        const start = stroke[index - 1];
+        const end = stroke[index];
+        const intervals = outsideCircleIntervals(start, end, point, radius);
+        changed = changed || intervals.length !== 1 || intervals[0][0] !== 0 || intervals[0][1] !== 1;
+
+        intervals.forEach(([startProgress, endProgress]) => {
+            if (startProgress > 0 && currentPiece.length > 0) {
+                pieces.push(currentPiece);
+                currentPiece = [];
+            }
+
+            pushPointIfDifferent(currentPiece, pointAtSegmentProgress(start, end, startProgress));
+            pushPointIfDifferent(currentPiece, pointAtSegmentProgress(start, end, endProgress));
+
+            if (endProgress < 1 && currentPiece.length > 0) {
+                pieces.push(currentPiece);
+                currentPiece = [];
+            }
+        });
+
+        if (intervals.length === 0 && currentPiece.length > 0) {
+            pieces.push(currentPiece);
+            currentPiece = [];
+        }
+    }
+
+    if (currentPiece.length > 0) {
+        pieces.push(currentPiece);
+    }
+
+    return { pieces: pieces.filter((piece) => piece.length > 0), changed };
+}
+
+function eraseDrawingAtPoint(point) {
+    let changed = false;
+    const nextStrokes = drawingStrokes.flatMap((stroke) => {
+        const result = eraseStrokeAtPoint(stroke, point);
+        changed = changed || result.changed;
+        return result.pieces;
+    });
+
+    if (changed) {
+        drawingStrokes = nextStrokes;
+        updateDrawingField();
+        renderDrawingCanvas();
+    }
+}
+
+function undoDrawingStroke() {
+    drawingStrokes.pop();
+    activeStroke = null;
+    updateDrawingField();
+    renderDrawingCanvas();
+}
+
 function clearDrawing() {
     drawingStrokes = [];
     activeStroke = null;
@@ -878,9 +1291,10 @@ function clearDrawing() {
 }
 
 function syncMarks(payload) {
-    const recentMarks = payload.marks.map(apiMarkToView);
+    const markItems = payload.marks.map(apiMarkToView);
+    const recentMarks = (payload.recent_marks || payload.marks).map(apiMarkToView);
     const existingUids = new Set(marks.map((mark) => mark.dataset.uid));
-    recentMarks.forEach((mark) => addOrUpdateMark(mark, false, { deferLayout: true }));
+    markItems.forEach((mark) => addOrUpdateMark(mark, false, { deferLayout: true }));
     removeMissingMarks(payload.mark_uids, { deferLayout: true });
     rebuildMarkPositionCache();
     rebuildWorldForCurrentMarks();
@@ -964,24 +1378,35 @@ expandWorldForMarks();
 
 if (drawingCanvas) {
     drawingCanvas.addEventListener("pointerdown", (event) => {
-        if (drawingStrokes.length >= 20) {
+        if (drawingMode === "erase") {
+            drawingCanvas.setPointerCapture(event.pointerId);
+            updateEraserIndicator(event);
+            eraseDrawingAtPoint(drawingPointFromEvent(event));
             return;
         }
 
         drawingCanvas.setPointerCapture(event.pointerId);
         activeStroke = [drawingPointFromEvent(event)];
         drawingStrokes.push(activeStroke);
-        updateDrawingField();
+        updateDrawingControls();
         renderDrawingCanvas();
     });
 
     drawingCanvas.addEventListener("pointermove", (event) => {
-        if (!activeStroke || activeStroke.length >= 500) {
+        if (drawingMode === "erase") {
+            updateEraserIndicator(event);
+        }
+
+        if (drawingMode === "erase" && event.buttons === 1) {
+            eraseDrawingAtPoint(drawingPointFromEvent(event));
+            return;
+        }
+
+        if (!activeStroke) {
             return;
         }
 
         activeStroke.push(drawingPointFromEvent(event));
-        updateDrawingField();
         renderDrawingCanvas();
     });
 
@@ -989,13 +1414,37 @@ if (drawingCanvas) {
         drawingCanvas.addEventListener(eventName, () => {
             activeStroke = null;
             updateDrawingField();
+            if (eventName === "pointerleave" && drawingEraserIndicator) {
+                drawingEraserIndicator.hidden = true;
+            }
         });
     });
+
+    drawingCanvas.addEventListener("pointerenter", (event) => {
+        if (drawingMode === "erase") {
+            updateEraserIndicator(event);
+        }
+    });
+}
+
+if (drawingPen) {
+    drawingPen.addEventListener("click", () => setDrawingMode("draw"));
+}
+
+if (drawingEraser) {
+    drawingEraser.addEventListener("click", () => setDrawingMode("erase"));
+}
+
+if (drawingUndo) {
+    drawingUndo.addEventListener("click", undoDrawingStroke);
 }
 
 if (drawingClear) {
     drawingClear.addEventListener("click", clearDrawing);
 }
+
+updateDrawingField();
+setDrawingMode("draw");
 
 if (hideCanvasHint && canvasHint) {
     hideCanvasHint.addEventListener("click", () => {
@@ -1024,12 +1473,21 @@ if (canvas && xField && yField && placementNote) {
         resetViewButton.addEventListener("click", resetCanvasView);
     }
 
+    if (fitWorldButton) {
+        fitWorldButton.addEventListener("click", fitWorldView);
+    }
+
+    if (exportWorldButton) {
+        exportWorldButton.addEventListener("click", exportWorldSvg);
+    }
+
     canvas.addEventListener("pointerdown", (event) => {
         if (!isPanGesture(event) || event.target.closest(".canvas-hint") || event.target.closest(".mark-dot")) {
             return;
         }
 
         event.preventDefault();
+        cancelCanvasViewAnimation();
         panStart = {
             pointerId: event.pointerId,
             clientX: event.clientX,
@@ -1057,9 +1515,10 @@ if (canvas && xField && yField && placementNote) {
             suppressNextCanvasClick = true;
         }
 
-        canvasView.panX = panStart.panX + deltaX;
-        canvasView.panY = panStart.panY + deltaY;
-        applyCanvasView();
+        const { minPanX, maxPanX, minPanY, maxPanY } = canvasPanBounds();
+        canvasView.panX = rubberbandPan(panStart.panX + deltaX, minPanX, maxPanX);
+        canvasView.panY = rubberbandPan(panStart.panY + deltaY, minPanY, maxPanY);
+        applyCanvasView({ clamp: false });
     });
 
     ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {
@@ -1067,6 +1526,7 @@ if (canvas && xField && yField && placementNote) {
             if (panStart && panStart.pointerId === event.pointerId) {
                 panStart = null;
                 canvas.classList.remove("is-panning");
+                settleCanvasView();
             }
             if (eventName === "pointerleave") {
                 clearPlacementState();
@@ -1103,7 +1563,7 @@ if (canvas && xField && yField && placementNote) {
 
                 if (!tooCloseToExistingMarks(x, y)) {
                     setPlacement(x, y);
-                    placementNote.textContent = `Random spot: ${xField.value}%, ${yField.value}%`;
+                    placementNote.textContent = `Random spot: ${xField.value}px, ${yField.value}px`;
                     return;
                 }
             }
@@ -1157,6 +1617,7 @@ if (canvas && xField && yField && placementNote) {
         keyboardPanActive = false;
         panStart = null;
         canvas.classList.remove("is-panning");
+        settleCanvasView();
         updatePanIntent();
     });
     resetCanvasView();
@@ -1165,6 +1626,7 @@ if (canvas && xField && yField && placementNote) {
 if (form && formStatus) {
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        updateDrawingField();
 
         if (!xField.value || !yField.value) {
             formStatus.classList.add("error");

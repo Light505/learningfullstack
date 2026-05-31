@@ -20,7 +20,9 @@ try {
         echo json_encode([
             'ok' => true,
             'count' => count_marks($pdo),
-            'marks' => recent_marks($pdo, 10),
+            'marks' => all_marks($pdo),
+            'recent_marks' => recent_marks($pdo, 10),
+            'mark_uids' => mark_uids($pdo),
         ]);
         exit;
     }
@@ -67,7 +69,6 @@ try {
     if ($spam_error !== null) {
         throw new InvalidArgumentException($spam_error);
     }
-    assert_not_recent_duplicate($pdo, $mark_input);
 
     $mark = save_mark($pdo, $mark_input);
     record_rate_limit_attempt($pdo, client_ip(), 'mark_submit');

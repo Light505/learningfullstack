@@ -1,0 +1,3 @@
+ALTER TABLE marks
+    MODIFY x_percent DECIMAL(8,2) NOT NULL,
+    MODIFY y_percent DECIMAL(8,2) NOT NULL;

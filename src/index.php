@@ -109,6 +109,22 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                                     <path d="M3 3v6h6"></path>
                                 </svg>
                             </button>
+                            <button type="button" class="icon-button" aria-label="Fit whole world" data-fit-world-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M3 9V3h6"></path>
+                                    <path d="M21 9V3h-6"></path>
+                                    <path d="M3 15v6h6"></path>
+                                    <path d="M21 15v6h-6"></path>
+                                    <path d="M8 8h8v8H8z"></path>
+                                </svg>
+                            </button>
+                            <button type="button" class="icon-button" aria-label="Export whole world" data-export-world-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M12 3v12"></path>
+                                    <path d="m7 10 5 5 5-5"></path>
+                                    <path d="M5 21h14"></path>
+                                </svg>
+                            </button>
                             <button type="button" class="icon-button" aria-label="Zoom in" data-zoom-in-button>
                                 <svg aria-hidden="true" viewBox="0 0 24 24">
                                     <circle cx="11" cy="11" r="7"></circle>
@@ -230,18 +246,28 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                             <div class="drawing-tool">
                                 <div class="drawing-tool-header">
                                     <span>Drawing</span>
-                                    <button type="button" class="mini-button" data-drawing-clear>Clear</button>
+                                    <div class="drawing-actions" aria-label="Drawing controls">
+                                        <button type="button" class="mini-button active" data-drawing-pen>Draw</button>
+                                        <button type="button" class="mini-button" data-drawing-eraser>Erase</button>
+                                        <button type="button" class="mini-button" data-drawing-undo disabled>Undo</button>
+                                    </div>
                                 </div>
-                                <canvas
-                                    class="drawing-canvas"
-                                    width="240"
-                                    height="120"
-                                    data-drawing-canvas
-                                    aria-label="Optional drawing pad"
-                                ></canvas>
+                                <div class="drawing-pad">
+                                    <canvas
+                                        class="drawing-canvas"
+                                        width="240"
+                                        height="120"
+                                        data-drawing-canvas
+                                        aria-label="Optional drawing pad"
+                                    ></canvas>
+                                    <span class="drawing-eraser-indicator" data-drawing-eraser-indicator hidden></span>
+                                </div>
+                                <div class="drawing-clear-row">
+                                    <button type="button" class="mini-button danger" data-drawing-clear>Clear drawing</button>
+                                </div>
                             </div>
                             <fieldset>
-                                <legend>Color</legend>
+                                <legend>Mark color</legend>
                                 <label class="swatch-option">
                                     <input type="radio" name="color" value="#d9826b" checked>
                                     <span class="swatch clay"></span>
