@@ -269,6 +269,18 @@ test.describe("responsive app layout", () => {
 
     await expect(page.locator("[data-preview-name]")).toHaveText("Recent Focus");
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Recent Focus");
+    await expect(page.locator("[data-mark-popout]")).toBeVisible();
+
+    const canvas = page.locator("[data-mark-canvas]");
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    await page.keyboard.down("Shift");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 80, box.y + box.height / 2 - 40);
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    await expect(page.locator("[data-mark-popout]")).toBeVisible();
   });
 
   test("supports bounded keyboard-modified pan and zoom controls", async ({ page }) => {
@@ -285,6 +297,7 @@ test.describe("responsive app layout", () => {
 
     await page.getByLabel("Zoom in").click();
     await expect(world).toHaveCSS("transform", /matrix\(1\.2/);
+    await expect(page.getByLabel("Canvas zoom level")).toHaveText("120%");
 
     const beforePan = await world.evaluate((element) => getComputedStyle(element).transform);
     const box = await canvas.boundingBox();
@@ -304,6 +317,106 @@ test.describe("responsive app layout", () => {
     const resetTransform = await world.evaluate((element) => getComputedStyle(element).transform);
     expect(resetTransform).not.toBe(afterPan);
     expect(resetTransform).toContain("matrix(1, 0, 0, 1");
+    await expect(page.getByLabel("Canvas zoom level")).toHaveText("100%");
+  });
+
+  test("supports keyboard zoom shortcuts and bounded controls", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const farMark = {
+        uid: `keyboard-zoom-${Date.now()}`,
+        display_name: "Keyboard Zoom",
+        message: "Far out.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#86a6c9",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: { ok: true, count: 1, marks: [farMark], mark_uids: [farMark.uid] },
+      }));
+    });
+
+    const world = page.locator("[data-canvas-world]");
+    await page.keyboard.press("=");
+    await expect(world).toHaveCSS("transform", /matrix\(1\.2/);
+    await expect(page.getByLabel("Canvas zoom level")).toHaveText("120%");
+
+    await page.keyboard.press("-");
+    await expect.poll(async () => page.getByLabel("Canvas zoom level").textContent()).toBe("100%");
+
+    await page.keyboard.press("f");
+    await expect(page.getByLabel("Export whole world")).toBeVisible();
+    await expect.poll(async () => page.getByLabel("Canvas zoom level").textContent()).not.toBe("100%");
+
+    await expect(page.getByLabel("Zoom out")).toBeDisabled();
+
+    await page.keyboard.press("0");
+    await expect.poll(async () => page.getByLabel("Canvas zoom level").textContent()).toBe("100%");
+    await expect(page.getByLabel("Zoom out")).toBeEnabled();
+  });
+
+  test("steps through tile and world-view stops before fitting the whole world", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const farMark = {
+        uid: `world-stop-${Date.now()}`,
+        display_name: "World Stop",
+        message: "Far enough to need world-view steps.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#86a6c9",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: { ok: true, count: 1, marks: [farMark], mark_uids: [farMark.uid] },
+      }));
+    });
+
+    const canvas = page.locator("[data-mark-canvas]");
+    const world = page.locator("[data-canvas-world]");
+    const expectedStops = await canvas.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const worldWidth = Number.parseFloat(getComputedStyle(element).getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(getComputedStyle(element).getPropertyValue("--canvas-world-height"));
+      const tileSize = 1024;
+      const padding = 36;
+      const fitZoom = Math.min(
+        1,
+        Math.max(1, rect.width - (padding * 2)) / worldWidth,
+        Math.max(1, rect.height - (padding * 2)) / worldHeight,
+      );
+      const tileZoomForCount = (tileCount) => Math.min(rect.width, rect.height) / (tileCount * tileSize);
+      const overviewBoundaryZoom = Math.max(fitZoom / 0.25, tileZoomForCount(25));
+      const tileStops = [3, 7, 13]
+        .map(tileZoomForCount)
+        .filter((zoom) => zoom > overviewBoundaryZoom + 0.001);
+
+      return [...tileStops, overviewBoundaryZoom, fitZoom / 0.5, fitZoom]
+        .map((zoom) => Math.max(fitZoom, Math.min(2.4, Number(zoom.toFixed(3)))))
+        .filter((zoom, index, stops) => stops.findIndex((item) => Math.abs(item - zoom) < 0.001) === index)
+        .sort((a, b) => b - a);
+    });
+
+    expect(expectedStops.length).toBeGreaterThanOrEqual(3);
+
+    for (const expectedZoom of expectedStops) {
+      await page.keyboard.press("-");
+      await expect.poll(async () => world.evaluate((element) => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+        return matrix.a;
+      })).toBeCloseTo(expectedZoom, 3);
+    }
+
+    await expect(page.getByLabel("Zoom out")).toBeDisabled();
   });
 
   test("fits the whole current world for map navigation", async ({ page }) => {
@@ -352,6 +465,238 @@ test.describe("responsive app layout", () => {
       return { zoom: matrix.a };
     });
     expect(fitState.zoom).toBeLessThan(1);
+
+    const renderedTileCount = await page.locator(".canvas-tile").count();
+    expect(renderedTileCount).toBeLessThan(80);
+  });
+
+  test("toggles fit world back to the previous camera view", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const mark = {
+        uid: `fit-toggle-${Date.now()}`,
+        display_name: "Fit Toggle",
+        message: "Far enough.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#86a6c9",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: { ok: true, count: 1, marks: [mark], mark_uids: [mark.uid] },
+      }));
+    });
+
+    const world = page.locator("[data-canvas-world]");
+    await page.getByLabel("Zoom in").click();
+    await expect(world).toHaveCSS("transform", /matrix\(1\.2/);
+    const beforeFit = await world.evaluate((element) => getComputedStyle(element).transform);
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.getByLabel("Export whole world")).toBeVisible();
+    await expect.poll(async () => world.evaluate((element) => getComputedStyle(element).transform)).not.toBe(beforeFit);
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.getByLabel("Export whole world")).toBeHidden();
+    await expect.poll(async () => world.evaluate((element) => getComputedStyle(element).transform)).toBe(beforeFit);
+  });
+
+  test("wheel zooms the canvas without scrolling the page", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    const canvas = page.locator("[data-mark-canvas]");
+    const world = page.locator("[data-canvas-world]");
+    await canvas.scrollIntoViewIfNeeded();
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -320);
+
+    await expect(world).toHaveCSS("transform", /matrix\(1\.2/);
+    await expect.poll(async () => page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+  });
+
+  test("keeps the mouse position anchored while wheel zooming out", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const farMark = {
+        uid: `wheel-anchor-${Date.now()}`,
+        display_name: "Wheel Anchor",
+        message: "Far enough for a large world.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#86a6c9",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: { ok: true, count: 1, marks: [farMark], mark_uids: [farMark.uid] },
+      }));
+    });
+
+    const canvas = page.locator("[data-mark-canvas]");
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+
+    const pointer = {
+      x: box.x + (box.width * 0.72),
+      y: box.y + (box.height * 0.42),
+    };
+    await page.mouse.move(pointer.x, pointer.y);
+
+    const before = await page.evaluate((pointer) => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvas.getBoundingClientRect();
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+
+      return {
+        x: (pointer.x - rect.left - matrix.m41) / matrix.a,
+        y: (pointer.y - rect.top - matrix.m42) / matrix.a,
+      };
+    }, pointer);
+
+    await page.mouse.wheel(0, 320);
+    await page.waitForTimeout(420);
+
+    const after = await page.evaluate((pointer) => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvas.getBoundingClientRect();
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+
+      return {
+        x: (pointer.x - rect.left - matrix.m41) / matrix.a,
+        y: (pointer.y - rect.top - matrix.m42) / matrix.a,
+      };
+    }, pointer);
+
+    expect(Math.abs(after.x - before.x)).toBeLessThan(4);
+    expect(Math.abs(after.y - before.y)).toBeLessThan(4);
+  });
+
+  test("centers the whole world at the final wheel zoom-out stop", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const farMark = {
+        uid: `wheel-fit-${Date.now()}`,
+        display_name: "Wheel Fit",
+        message: "Far enough for final fit.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#86a6c9",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: { ok: true, count: 1, marks: [farMark], mark_uids: [farMark.uid] },
+      }));
+    });
+
+    const canvas = page.locator("[data-mark-canvas]");
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box.x + (box.width * 0.75), box.y + (box.height * 0.35));
+
+    for (let index = 0; index < 6; index += 1) {
+      await page.mouse.wheel(0, 320);
+      await page.waitForTimeout(340);
+    }
+
+    const fitState = await canvas.evaluate((element) => {
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+
+      return {
+        zoom: matrix.a,
+        panX: matrix.m41,
+        panY: matrix.m42,
+        expectedPanX: (rect.width - (worldWidth * matrix.a)) / 2,
+        expectedPanY: (rect.height - (worldHeight * matrix.a)) / 2,
+      };
+    });
+
+    expect(fitState.panX).toBeCloseTo(fitState.expectedPanX, 1);
+    expect(fitState.panY).toBeCloseTo(fitState.expectedPanY, 1);
+    await expect(page.getByLabel("Zoom out")).toBeDisabled();
+  });
+
+  test("clusters dense marks while zoomed out in map mode", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const marks = [
+        {
+          uid: `cluster-a-${Date.now()}`,
+          display_name: "Cluster A",
+          message: "Near one.",
+          drawing: null,
+          x_percent: "100.00",
+          y_percent: "120.00",
+          color: "#86a6c9",
+          shape: "circle",
+          created_at: "2026-05-29 14:00:00",
+        },
+        {
+          uid: `cluster-b-${Date.now()}`,
+          display_name: "Cluster B",
+          message: "Near two.",
+          drawing: null,
+          x_percent: "130.00",
+          y_percent: "150.00",
+          color: "#f0b35a",
+          shape: "square",
+          created_at: "2026-05-29 14:01:00",
+        },
+        {
+          uid: `cluster-far-${Date.now()}`,
+          display_name: "Cluster Far",
+          message: "Expands map.",
+          drawing: null,
+          x_percent: "50000.00",
+          y_percent: "50000.00",
+          color: "#9fc5a8",
+          shape: "diamond",
+          created_at: "2026-05-29 14:02:00",
+        },
+      ];
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator("[data-mark-canvas]")).toHaveClass(/is-map-view/);
+    await expect(page.locator(".mark-dot").first()).toHaveCSS("opacity", "0");
+    await expect(page.locator(".map-cluster", { hasText: "2" })).toBeVisible();
+
+    const beforeClick = await page.locator("[data-canvas-world]").evaluate((element) => getComputedStyle(element).transform);
+    await page.locator(".map-cluster", { hasText: "2" }).click();
+    await expect.poll(async () => page.locator("[data-canvas-world]").evaluate((element) => getComputedStyle(element).transform)).not.toBe(beforeClick);
   });
 
   test("exports the whole world as an SVG with all synced marks", async ({ page }) => {
@@ -393,6 +738,9 @@ test.describe("responsive app layout", () => {
         },
       }));
     });
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.getByLabel("Export whole world")).toBeVisible();
 
     const downloadPromise = page.waitForEvent("download");
     await page.getByLabel("Export whole world").click();
@@ -772,6 +1120,7 @@ test.describe("responsive app layout", () => {
       Math.random = () => values.shift() ?? 0.9;
     });
 
+    const beforeRandomTransform = await page.locator("[data-canvas-world]").evaluate((element) => getComputedStyle(element).transform);
     await page.getByRole("button", { name: /random/i }).click();
 
     const placement = await page.evaluate(() => ({
@@ -785,6 +1134,7 @@ test.describe("responsive app layout", () => {
 
     expect(placement.x).toBeLessThan(1024);
     expect(placement.y).toBeLessThan(1024);
+    await expect.poll(async () => page.locator("[data-canvas-world]").evaluate((element) => getComputedStyle(element).transform)).not.toBe(beforeRandomTransform);
     expect(placement.world).toEqual(initialWorld);
   });
 

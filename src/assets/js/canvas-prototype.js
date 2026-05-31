@@ -4,11 +4,13 @@ const previewName = document.querySelector("[data-preview-name]");
 const previewMessage = document.querySelector("[data-preview-message]");
 const previewDrawing = document.querySelector("[data-preview-drawing]");
 const previewCreated = document.querySelector("[data-preview-created]");
+const markPopout = document.querySelector("[data-mark-popout]");
 const canvas = document.querySelector("[data-mark-canvas]");
 const canvasHint = document.querySelector("[data-canvas-hint]");
 const hideCanvasHint = document.querySelector("[data-hide-canvas-hint]");
 const canvasWorld = document.querySelector("[data-canvas-world]");
 const canvasTiles = document.querySelector("[data-canvas-tiles]");
+const mapClusters = document.querySelector("[data-map-clusters]");
 const form = document.querySelector("[data-mark-form]");
 const xField = document.querySelector("[data-x-field]");
 const yField = document.querySelector("[data-y-field]");
@@ -20,15 +22,19 @@ const drawingPen = document.querySelector("[data-drawing-pen]");
 const drawingEraser = document.querySelector("[data-drawing-eraser]");
 const drawingEraserIndicator = document.querySelector("[data-drawing-eraser-indicator]");
 const colorInputs = Array.from(document.querySelectorAll('input[name="color"]'));
+const shapeInputs = Array.from(document.querySelectorAll('input[name="shape"]'));
+const countedInputs = Array.from(document.querySelectorAll("[data-count-input]"));
 const placementNote = document.querySelector("[data-placement-note]");
 const formStatus = document.querySelector("[data-form-status]");
 const placeButton = document.querySelector("[data-place-button]");
 const randomButton = document.querySelector("[data-random-button]");
 const zoomInButton = document.querySelector("[data-zoom-in-button]");
 const zoomOutButton = document.querySelector("[data-zoom-out-button]");
+const zoomReadout = document.querySelector("[data-zoom-readout]");
 const resetViewButton = document.querySelector("[data-reset-view-button]");
 const fitWorldButton = document.querySelector("[data-fit-world-button]");
 const exportWorldButton = document.querySelector("[data-export-world-button]");
+const exportTools = exportWorldButton?.closest(".export-tools");
 const focusLatestButton = document.querySelector("[data-focus-latest-button]");
 const undoButton = document.querySelector("[data-undo-button]");
 const placementMarker = document.querySelector("[data-placement-marker]");
@@ -50,14 +56,36 @@ let canvasView = { zoom: 1, panX: 0, panY: 0 };
 let panStart = null;
 let keyboardPanActive = false;
 let suppressNextCanvasClick = false;
+let suppressNextDocumentClick = false;
+let fitReturnView = null;
+let isFitWorldView = false;
+let undoMarkAvailable = Boolean(undoButton?.dataset.lastMarkUid);
+let lastWheelZoomAt = 0;
+let lastWheelZoomDirection = 0;
 const tileSize = 1024;
 const eraserRadius = 4.5;
+const mapModeZoom = 0.32;
+const maxCanvasZoom = 2.4;
+const zoomStep = 0.2;
+const wheelZoomCooldown = 260;
+const tileViewStopCounts = [3, 7, 13];
+const maxTileOverviewStopCount = 25;
+const worldViewStopFractions = [0.25, 0.5, 1];
+const clusterSteps = [
+    { minZoom: 0.24, tileFraction: 1 / 8 },
+    { minZoom: 0.14, tileFraction: 1 / 4 },
+    { minZoom: 0.08, tileFraction: 1 / 2 },
+    { minZoom: 0, tileFraction: 1 },
+];
 const committedTiles = new Set(["0,0"]);
 let worldBounds = { minX: 0, maxX: tileSize, minY: 0, maxY: tileSize };
 let viewAnimation = null;
 let geometryDirty = true;
 let renderedTileSignature = "";
+let renderedClusterSignature = "";
+let renderedClusterMode = false;
 const markPositions = new Map();
+let canvasHintTimer = null;
 const markPreview = document.querySelector(".mark-preview");
 
 function setActiveTool(activeButton) {
@@ -231,9 +259,12 @@ function renderCanvasTiles() {
         return;
     }
 
+    const visibleTiles = Array.from(visibleTileKeys()).sort();
     const tileSignature = [
         Array.from(committedTiles).sort().join("|"),
-        Array.from(visibleTileKeys()).sort().join("|"),
+        visibleTiles.join("|"),
+        worldBounds.minX,
+        worldBounds.minY,
     ].join("::");
     if (tileSignature === renderedTileSignature) {
         return;
@@ -241,28 +272,143 @@ function renderCanvasTiles() {
 
     renderedTileSignature = tileSignature;
     canvasTiles.innerHTML = "";
-    const minTileX = worldBounds.minX / tileSize;
-    const maxTileX = (worldBounds.maxX / tileSize) - 1;
-    const minTileY = worldBounds.minY / tileSize;
-    const maxTileY = (worldBounds.maxY / tileSize) - 1;
+    const fragment = document.createDocumentFragment();
 
-    for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
-        for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
-            const key = `${tileX},${tileY}`;
-            const tile = document.createElement("span");
-            tile.className = isPlaceableTile(tileX, tileY)
-                ? "canvas-tile is-committed"
-                : "canvas-tile is-unavailable";
-            tile.style.setProperty("--tile-left", `${tileX * tileSize - worldBounds.minX}px`);
-            tile.style.setProperty("--tile-top", `${tileY * tileSize - worldBounds.minY}px`);
-            tile.style.setProperty("--tile-width", `${tileSize}px`);
-            tile.style.setProperty("--tile-height", `${tileSize}px`);
-            tile.style.setProperty("--tile-bg-x", `${-(tileX * tileSize)}px`);
-            tile.style.setProperty("--tile-bg-y", `${-(tileY * tileSize)}px`);
-            tile.style.setProperty("--tile-shade", `${Math.abs((tileX * 17) + (tileY * 31)) % 7}`);
-            canvasTiles.appendChild(tile);
-        }
+    visibleTiles.forEach((key) => {
+        const [tileX, tileY] = key.split(",").map(Number);
+        const tile = document.createElement("span");
+        tile.className = isPlaceableTile(tileX, tileY)
+            ? "canvas-tile is-committed"
+            : "canvas-tile is-unavailable";
+        tile.style.setProperty("--tile-left", `${tileX * tileSize - worldBounds.minX}px`);
+        tile.style.setProperty("--tile-top", `${tileY * tileSize - worldBounds.minY}px`);
+        tile.style.setProperty("--tile-width", `${tileSize}px`);
+        tile.style.setProperty("--tile-height", `${tileSize}px`);
+        tile.style.setProperty("--tile-bg-x", `${-(tileX * tileSize)}px`);
+        tile.style.setProperty("--tile-bg-y", `${-(tileY * tileSize)}px`);
+        tile.style.setProperty("--tile-shade", `${Math.abs((tileX * 17) + (tileY * 31)) % 7}`);
+        fragment.appendChild(tile);
+    });
+
+    canvasTiles.appendChild(fragment);
+}
+
+function clusterCellSizeForZoom(zoom) {
+    const step = clusterSteps.find((item) => zoom >= item.minZoom) || clusterSteps[clusterSteps.length - 1];
+    return tileSize * step.tileFraction;
+}
+
+function mapClusterShape(cluster) {
+    if (cluster.marks.length !== 1) {
+        return "circle";
     }
+
+    const mark = cluster.marks[0];
+    return mark.classList.contains("diamond")
+        ? "diamond"
+        : mark.classList.contains("square")
+            ? "square"
+            : "circle";
+}
+
+function mapClusterColor(cluster) {
+    if (cluster.marks.length !== 1) {
+        return "#2f2a22";
+    }
+
+    return cluster.marks[0].style.getPropertyValue("--mark-color") || "#d9826b";
+}
+
+function renderMapClusters() {
+    if (!mapClusters) {
+        return;
+    }
+
+    const isMapView = canvasView.zoom < mapModeZoom;
+    if (isMapView !== renderedClusterMode) {
+        renderedClusterMode = isMapView;
+        renderedClusterSignature = "";
+    }
+
+    if (!isMapView) {
+        if (renderedClusterSignature !== "hidden") {
+            mapClusters.innerHTML = "";
+            renderedClusterSignature = "hidden";
+        }
+        return;
+    }
+
+    const cellSize = clusterCellSizeForZoom(canvasView.zoom);
+    const markSignature = marks
+        .map((mark) => `${mark.dataset.uid}:${mark.dataset.x}:${mark.dataset.y}:${mark.className}:${mark.style.getPropertyValue("--mark-color")}`)
+        .join("|");
+    const signature = `${cellSize}:${worldBounds.minX}:${worldBounds.minY}:${markSignature}`;
+    if (signature === renderedClusterSignature) {
+        return;
+    }
+
+    renderedClusterSignature = signature;
+    mapClusters.innerHTML = "";
+
+    const clusters = new Map();
+    marks.forEach((mark) => {
+        const x = Number.parseFloat(mark.dataset.x || "0");
+        const y = Number.parseFloat(mark.dataset.y || "0");
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return;
+        }
+
+        const clusterX = Math.floor(x / cellSize);
+        const clusterY = Math.floor(y / cellSize);
+        const key = `${clusterX},${clusterY}`;
+        const cluster = clusters.get(key) || {
+            xTotal: 0,
+            yTotal: 0,
+            marks: [],
+        };
+
+        cluster.xTotal += x;
+        cluster.yTotal += y;
+        cluster.marks.push(mark);
+        clusters.set(key, cluster);
+    });
+
+    clusters.forEach((cluster) => {
+        const count = cluster.marks.length;
+        const x = cluster.xTotal / count;
+        const y = cluster.yTotal / count;
+        const button = document.createElement("button");
+        const size = Math.min(44, 18 + (Math.sqrt(count) * 7));
+        const shape = mapClusterShape(cluster);
+
+        button.type = "button";
+        button.className = count > 1
+            ? `map-cluster ${shape} is-multi`
+            : `map-cluster ${shape}`;
+        button.style.setProperty("--cluster-x", `${x - worldBounds.minX}px`);
+        button.style.setProperty("--cluster-y", `${y - worldBounds.minY}px`);
+        button.style.setProperty("--cluster-screen-size", `${size}px`);
+        button.style.setProperty("--cluster-color", mapClusterColor(cluster));
+        button.dataset.count = String(count);
+        button.setAttribute("aria-label", count === 1
+            ? `View mark by ${cluster.marks[0].dataset.name}`
+            : `Zoom to ${count} marks`);
+        if (count > 1) {
+            button.textContent = String(count);
+        }
+        button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (count === 1) {
+                focusMark(cluster.marks[0], 1.45);
+                return;
+            }
+
+            const nextZoom = Math.min(1.2, Math.max(mapModeZoom + 0.08, canvasView.zoom * 1.8));
+            focusCanvasOnCoordinate(x, y, nextZoom);
+        });
+
+        mapClusters.appendChild(button);
+    });
 }
 
 function applyWorldGeometry() {
@@ -309,6 +455,28 @@ function positionPlacementMarker() {
     }
 }
 
+function positionMarkPopout() {
+    if (!canvas || !markPopout || markPopout.hidden) {
+        return;
+    }
+
+    const selectedMark = marks.find((mark) => mark.dataset.selected === "true");
+    if (!selectedMark) {
+        return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Number.parseFloat(selectedMark.dataset.x || "0");
+    const y = Number.parseFloat(selectedMark.dataset.y || "0");
+    const screenX = canvasView.panX + ((x - worldBounds.minX) * canvasView.zoom);
+    const screenY = canvasView.panY + ((y - worldBounds.minY) * canvasView.zoom);
+    const clampedX = Math.max(170, Math.min(rect.width - 170, screenX));
+    const clampedY = Math.max(132, Math.min(rect.height - 18, screenY));
+
+    markPopout.style.setProperty("--popout-x", `${(clampedX / rect.width) * 100}%`);
+    markPopout.style.setProperty("--popout-y", `${(clampedY / rect.height) * 100}%`);
+}
+
 function cacheMarkPosition(mark) {
     markPositions.set(mark.dataset.uid, {
         x: Number.parseFloat(mark.dataset.x || "0"),
@@ -339,7 +507,113 @@ function applyCanvasView(options = {}) {
     canvas.style.setProperty("--canvas-pan-x", `${canvasView.panX}px`);
     canvas.style.setProperty("--canvas-pan-y", `${canvasView.panY}px`);
     canvas.style.setProperty("--canvas-zoom", String(canvasView.zoom));
-    canvas.classList.toggle("is-map-view", canvasView.zoom < 0.32);
+    canvas.classList.toggle("is-map-view", canvasView.zoom < mapModeZoom);
+    renderMapClusters();
+    positionMarkPopout();
+    updateZoomControls();
+}
+
+function zoomLimits() {
+    return {
+        min: fitWorldZoom(),
+        max: maxCanvasZoom,
+    };
+}
+
+function clampZoom(zoom) {
+    const { min, max } = zoomLimits();
+    return Math.max(min, Math.min(max, Number(zoom.toFixed(3))));
+}
+
+function formatZoomPercent(zoom) {
+    return `${Math.round(zoom * 100)}%`;
+}
+
+function updateZoomControls() {
+    const { min, max } = zoomLimits();
+    const roundedZoom = Number(canvasView.zoom.toFixed(3));
+
+    if (zoomReadout) {
+        zoomReadout.value = formatZoomPercent(canvasView.zoom);
+        zoomReadout.textContent = formatZoomPercent(canvasView.zoom);
+    }
+
+    if (zoomOutButton) {
+        zoomOutButton.disabled = roundedZoom <= Number(min.toFixed(3));
+    }
+
+    if (zoomInButton) {
+        zoomInButton.disabled = roundedZoom >= Number(max.toFixed(3));
+    }
+}
+
+function tileViewZoomForCount(tileCount) {
+    if (!canvas) {
+        return 1;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    return Math.min(rect.width, rect.height) / (tileCount * tileSize);
+}
+
+function overviewZoomStops() {
+    const fitZoom = fitWorldZoom();
+    const quarterWorldZoom = fitZoom / 0.25;
+    const maxTileOverviewZoom = tileViewZoomForCount(maxTileOverviewStopCount);
+    const overviewBoundaryZoom = Math.max(quarterWorldZoom, maxTileOverviewZoom);
+    const tileStops = tileViewStopCounts
+        .map(tileViewZoomForCount)
+        .filter((zoom) => zoom > overviewBoundaryZoom + 0.001);
+    const worldStops = worldViewStopFractions
+        .filter((fraction) => fraction > 0.25)
+        .map((fraction) => fitZoom / fraction);
+
+    return [...tileStops, overviewBoundaryZoom, ...worldStops]
+        .map(clampZoom)
+        .filter((zoom) => zoom >= fitZoom && zoom <= maxCanvasZoom)
+        .filter((zoom, index, stops) => stops.findIndex((item) => Math.abs(item - zoom) < 0.001) === index)
+        .sort((a, b) => b - a);
+}
+
+function nextZoomOutStop(targetZoom) {
+    const clampedTarget = clampZoom(targetZoom);
+    const nextStop = overviewZoomStops().find((zoom) => zoom < canvasView.zoom - 0.001);
+
+    if (canvasView.zoom <= 1.001 && nextStop) {
+        return nextStop;
+    }
+
+    if (nextStop && nextStop > clampedTarget + 0.001) {
+        return nextStop;
+    }
+
+    return clampedTarget;
+}
+
+function setExportVisible(isVisible) {
+    if (exportTools) {
+        exportTools.hidden = !isVisible;
+    }
+}
+
+function setUndoMarkAvailable(isAvailable, uid = "") {
+    undoMarkAvailable = isAvailable && uid !== "";
+    if (!undoButton) {
+        return;
+    }
+
+    if (uid) {
+        undoButton.dataset.lastMarkUid = uid;
+    } else {
+        delete undoButton.dataset.lastMarkUid;
+    }
+    undoButton.disabled = !undoMarkAvailable;
+}
+
+function leaveFitWorldMode() {
+    isFitWorldView = false;
+    fitReturnView = null;
+    setExportVisible(false);
 }
 
 function commitTilesForMarks(markItems) {
@@ -387,6 +661,19 @@ function cancelCanvasViewAnimation() {
 
     window.cancelAnimationFrame(viewAnimation);
     viewAnimation = null;
+}
+
+function renderedCanvasView() {
+    if (!canvasWorld) {
+        return { ...canvasView };
+    }
+
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(canvasWorld).transform);
+    return {
+        zoom: matrix.a || canvasView.zoom,
+        panX: matrix.m41,
+        panY: matrix.m42,
+    };
 }
 
 function animateCanvasViewTo(nextView, duration = 520, options = {}) {
@@ -444,13 +731,14 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
     }
 
     const rect = canvas.getBoundingClientRect();
-    const zoom = Math.max(1, Math.min(2.4, targetZoom));
+    const zoom = clampZoom(Math.max(1, targetZoom));
 
     animateCanvasViewTo({
         zoom,
         panX: (rect.width / 2) - ((x - worldBounds.minX) * zoom),
         panY: (rect.height / 2) - ((y - worldBounds.minY) * zoom),
     });
+    leaveFitWorldMode();
 }
 
 function fitWorldZoom() {
@@ -473,36 +761,78 @@ function fitWorldView() {
         return;
     }
 
+    if (isFitWorldView && fitReturnView) {
+        const returnView = fitReturnView;
+        leaveFitWorldMode();
+        animateCanvasViewTo(returnView, 520);
+        return;
+    }
+
     const rect = canvas.getBoundingClientRect();
     const worldWidth = worldBounds.maxX - worldBounds.minX;
     const worldHeight = worldBounds.maxY - worldBounds.minY;
     const zoom = fitWorldZoom();
 
+    fitReturnView = { ...canvasView };
+    isFitWorldView = true;
     animateCanvasViewTo({
         zoom,
         panX: (rect.width - (worldWidth * zoom)) / 2,
         panY: (rect.height - (worldHeight * zoom)) / 2,
     }, 520, { clamp: false });
+    setExportVisible(true);
 }
 
-function zoomCanvas(delta) {
+function zoomCanvasTo(targetZoom, origin = null, options = {}) {
     if (!canvas) {
         return;
     }
 
     cancelCanvasViewAnimation();
     const rect = canvas.getBoundingClientRect();
-    const oldZoom = canvasView.zoom;
-    const nextZoom = Math.max(fitWorldZoom(), Math.min(2.4, Number((oldZoom + delta).toFixed(2))));
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const worldX = (centerX - canvasView.panX) / oldZoom;
-    const worldY = (centerY - canvasView.panY) / oldZoom;
+    const currentView = renderedCanvasView();
+    canvasView = currentView;
+    const oldZoom = currentView.zoom;
+    const nextZoom = clampZoom(targetZoom);
+    const centerX = origin ? origin.x : rect.width / 2;
+    const centerY = origin ? origin.y : rect.height / 2;
+    const worldX = (centerX - currentView.panX) / oldZoom;
+    const worldY = (centerY - currentView.panY) / oldZoom;
+    let nextView = {
+        zoom: nextZoom,
+        panX: centerX - (worldX * nextZoom),
+        panY: centerY - (worldY * nextZoom),
+    };
+    const entersMapView = oldZoom >= mapModeZoom && nextZoom < mapModeZoom;
+    const reachesWorldFloor = nextZoom <= fitWorldZoom() + 0.001 && nextZoom < oldZoom;
+    if (reachesWorldFloor) {
+        const worldWidth = worldBounds.maxX - worldBounds.minX;
+        const worldHeight = worldBounds.maxY - worldBounds.minY;
+        nextView = {
+            zoom: nextZoom,
+            panX: (rect.width - (worldWidth * nextZoom)) / 2,
+            panY: (rect.height - (worldHeight * nextZoom)) / 2,
+        };
+    }
 
-    canvasView.zoom = nextZoom;
-    canvasView.panX = centerX - (worldX * nextZoom);
-    canvasView.panY = centerY - (worldY * nextZoom);
-    applyCanvasView();
+    const duration = entersMapView || reachesWorldFloor
+        ? 280
+        : options.duration ?? 180;
+    const viewOptions = {
+        clamp: options.clamp ?? !origin,
+    };
+
+    animateCanvasViewTo(nextView, duration, viewOptions);
+    leaveFitWorldMode();
+}
+
+function zoomCanvas(delta, origin = null, options = {}) {
+    const targetZoom = Number((canvasView.zoom + delta).toFixed(2));
+    zoomCanvasTo(delta < 0 ? nextZoomOutStop(targetZoom) : targetZoom, origin, options);
+}
+
+function zoomCanvasByButton(direction) {
+    zoomCanvas(direction * zoomStep);
 }
 
 function resetCanvasView() {
@@ -517,6 +847,7 @@ function resetCanvasView() {
         panY: worldBounds.minY,
     };
     applyCanvasView();
+    leaveFitWorldMode();
 }
 
 function svgEscape(value) {
@@ -746,7 +1077,13 @@ function setPlacement(x, y) {
     return true;
 }
 
-function selectMark(mark) {
+function hideMarkPopout() {
+    if (markPopout) {
+        markPopout.hidden = true;
+    }
+}
+
+function selectMark(mark, options = {}) {
     marks.forEach((item) => item.removeAttribute("data-selected"));
     mark.setAttribute("data-selected", "true");
     markPreview?.classList.remove("is-empty");
@@ -756,11 +1093,16 @@ function selectMark(mark) {
     previewMessage.textContent = mark.dataset.message;
     renderDrawingPreview(mark.dataset.drawing || "");
     previewCreated.textContent = mark.dataset.created;
+    if (markPopout) {
+        markPopout.hidden = options.showPopout === false;
+        positionMarkPopout();
+    }
 }
 
 function setEmptyPreview() {
     marks.forEach((item) => item.removeAttribute("data-selected"));
     markPreview?.classList.add("is-empty");
+    hideMarkPopout();
     previewChip.style.background = "#f0b35a";
     previewName.textContent = "No mark selected";
     previewMessage.textContent = "Choose an existing mark to preview it here.";
@@ -771,12 +1113,12 @@ function setEmptyPreview() {
     previewCreated.textContent = "Waiting for the first mark.";
 }
 
-function focusMark(mark, targetZoom = 1.35) {
+function focusMark(mark, targetZoom = 1.35, options = {}) {
     if (!mark) {
         return;
     }
 
-    selectMark(mark);
+    selectMark(mark, { showPopout: options.showPopout !== false });
     focusCanvasOnCoordinate(
         Number.parseFloat(mark.dataset.x || "0"),
         Number.parseFloat(mark.dataset.y || "0"),
@@ -785,7 +1127,10 @@ function focusMark(mark, targetZoom = 1.35) {
 }
 
 function bindMark(mark) {
-    mark.addEventListener("click", () => selectMark(mark));
+    mark.addEventListener("click", (event) => {
+        event.stopPropagation();
+        selectMark(mark);
+    });
 }
 
 function formatCreatedAt(value) {
@@ -843,6 +1188,45 @@ function animateNewMark(mark) {
     }, { once: true });
 }
 
+function wait(milliseconds) {
+    return new Promise((resolve) => {
+        window.setTimeout(resolve, milliseconds);
+    });
+}
+
+function animateUndoMark(mark) {
+    if (!mark || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        return Promise.resolve();
+    }
+
+    mark.classList.add("is-undoing");
+
+    return new Promise((resolve) => {
+        mark.addEventListener("animationend", resolve, { once: true });
+        window.setTimeout(resolve, 760);
+    });
+}
+
+function removeMarkElement(mark) {
+    if (!mark) {
+        return;
+    }
+
+    const wasSelected = mark.dataset.selected === "true";
+    marks = marks.filter((item) => item !== mark);
+    markPositions.delete(mark.dataset.uid);
+    mark.remove();
+    rebuildWorldForCurrentMarks();
+
+    if (wasSelected) {
+        if (marks.length > 0) {
+            selectMark(marks[marks.length - 1], { showPopout: false });
+        } else {
+            setEmptyPreview();
+        }
+    }
+}
+
 function addOrUpdateMark(mark, select = false, options = {}) {
     const existing = marks.find((item) => item.dataset.uid === mark.uid);
     if (existing) {
@@ -887,7 +1271,23 @@ function updateShapePreviewColor() {
     }
 
     const selectedColor = colorInputs.find((input) => input.checked)?.value || "#d9826b";
+    const selectedShape = shapeInputs.find((input) => input.checked)?.value || "circle";
     form.style.setProperty("--selected-mark-color", selectedColor);
+    placementMarker?.style.setProperty("--selected-mark-color", selectedColor);
+    if (placementMarker) {
+        placementMarker.classList.toggle("circle", selectedShape === "circle");
+        placementMarker.classList.toggle("square", selectedShape === "square");
+        placementMarker.classList.toggle("diamond", selectedShape === "diamond");
+    }
+}
+
+function updateCharacterCounts() {
+    countedInputs.forEach((input) => {
+        const output = document.querySelector(`[data-count-for="${input.dataset.countInput}"]`);
+        if (output) {
+            output.textContent = String(input.value.length);
+        }
+    });
 }
 
 function drawingToPaths(drawing) {
@@ -1017,7 +1417,7 @@ function renderRecent(markItems) {
         button.type = "button";
         button.className = "recent-mark-button";
         button.dataset.recentUid = mark.uid;
-        dot.className = "recent-dot";
+        dot.className = `recent-dot ${mark.shape}`;
         dot.style.setProperty("--mark-color", mark.color);
         name.textContent = mark.name;
         message.textContent = mark.message;
@@ -1042,7 +1442,7 @@ function showMarkToast(mark) {
     const message = document.createElement("span");
 
     toast.className = "mark-toast";
-    dot.className = "recent-dot";
+    dot.className = `recent-dot ${mark.shape}`;
     dot.style.setProperty("--mark-color", mark.color);
     title.textContent = `${mark.name} left a mark`;
     message.textContent = mark.message;
@@ -1365,14 +1765,21 @@ marks.forEach(bindMark);
 rebuildMarkPositionCache();
 const selectedMark = marks.find((mark) => mark.dataset.selected === "true");
 if (selectedMark) {
-    selectMark(selectedMark);
+    selectMark(selectedMark, { showPopout: false });
 } else if (marks.length === 0) {
     setEmptyPreview();
 }
 
 updateShapePreviewColor();
+updateCharacterCounts();
 colorInputs.forEach((input) => {
     input.addEventListener("change", updateShapePreviewColor);
+});
+shapeInputs.forEach((input) => {
+    input.addEventListener("change", updateShapePreviewColor);
+});
+countedInputs.forEach((input) => {
+    input.addEventListener("input", updateCharacterCounts);
 });
 expandWorldForMarks();
 
@@ -1445,10 +1852,28 @@ if (drawingClear) {
 
 updateDrawingField();
 setDrawingMode("draw");
+setUndoMarkAvailable(undoMarkAvailable, undoButton?.dataset.lastMarkUid || "");
 
 if (hideCanvasHint && canvasHint) {
     hideCanvasHint.addEventListener("click", () => {
         canvasHint.hidden = true;
+    });
+}
+
+if (canvasHint) {
+    canvasHintTimer = window.setTimeout(() => {
+        canvasHint.hidden = true;
+    }, 7000);
+    canvasHint.addEventListener("pointerenter", () => {
+        if (canvasHintTimer) {
+            window.clearTimeout(canvasHintTimer);
+            canvasHintTimer = null;
+        }
+    });
+    canvasHint.addEventListener("pointerleave", () => {
+        canvasHintTimer = window.setTimeout(() => {
+            canvasHint.hidden = true;
+        }, 2400);
     });
 }
 
@@ -1462,11 +1887,11 @@ if (canvas && xField && yField && placementNote) {
     }
 
     if (zoomInButton) {
-        zoomInButton.addEventListener("click", () => zoomCanvas(0.2));
+        zoomInButton.addEventListener("click", () => zoomCanvasByButton(1));
     }
 
     if (zoomOutButton) {
-        zoomOutButton.addEventListener("click", () => zoomCanvas(-0.2));
+        zoomOutButton.addEventListener("click", () => zoomCanvasByButton(-1));
     }
 
     if (resetViewButton) {
@@ -1513,12 +1938,14 @@ if (canvas && xField && yField && placementNote) {
 
         if (Math.hypot(deltaX, deltaY) > 3) {
             suppressNextCanvasClick = true;
+            suppressNextDocumentClick = true;
         }
 
         const { minPanX, maxPanX, minPanY, maxPanY } = canvasPanBounds();
         canvasView.panX = rubberbandPan(panStart.panX + deltaX, minPanX, maxPanX);
         canvasView.panY = rubberbandPan(panStart.panY + deltaY, minPanY, maxPanY);
         applyCanvasView({ clamp: false });
+        leaveFitWorldMode();
     });
 
     ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {
@@ -1544,6 +1971,8 @@ if (canvas && xField && yField && placementNote) {
             return;
         }
 
+        hideMarkPopout();
+
         if (event.shiftKey || keyboardPanActive) {
             return;
         }
@@ -1563,6 +1992,7 @@ if (canvas && xField && yField && placementNote) {
 
                 if (!tooCloseToExistingMarks(x, y)) {
                     setPlacement(x, y);
+                    focusCanvasOnCoordinate(x, y, 1.35);
                     placementNote.textContent = `Random spot: ${xField.value}px, ${yField.value}px`;
                     return;
                 }
@@ -1573,6 +2003,27 @@ if (canvas && xField && yField && placementNote) {
         });
     }
 
+    canvas.addEventListener("wheel", (event) => {
+        if (event.target.closest(".canvas-hint")) {
+            return;
+        }
+
+        event.preventDefault();
+        const direction = event.deltaY < 0 ? 1 : -1;
+        const now = performance.now();
+        if (direction === lastWheelZoomDirection && now - lastWheelZoomAt < wheelZoomCooldown) {
+            return;
+        }
+
+        lastWheelZoomAt = now;
+        lastWheelZoomDirection = direction;
+        const rect = canvas.getBoundingClientRect();
+        zoomCanvas(direction * zoomStep, {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+        }, { duration: 140 });
+    }, { passive: false });
+
     if (recentList) {
         recentList.addEventListener("click", (event) => {
             const button = event.target.closest("[data-recent-uid]");
@@ -1581,6 +2032,7 @@ if (canvas && xField && yField && placementNote) {
             }
 
             const mark = marks.find((item) => item.dataset.uid === button.dataset.recentUid);
+            canvas?.scrollIntoView({ block: "center", behavior: "smooth" });
             focusMark(mark);
         });
     }
@@ -1597,6 +2049,40 @@ if (canvas && xField && yField && placementNote) {
 
     window.addEventListener("resize", resetCanvasView);
     window.addEventListener("keydown", (event) => {
+        if (isTextInputTarget(event.target)) {
+            return;
+        }
+
+        if (event.key === "+" || event.key === "=") {
+            event.preventDefault();
+            zoomCanvasByButton(1);
+            return;
+        }
+
+        if (event.key === "-") {
+            event.preventDefault();
+            zoomCanvasByButton(-1);
+            return;
+        }
+
+        if (event.key === "0") {
+            event.preventDefault();
+            resetCanvasView();
+            return;
+        }
+
+        if (event.key === "1") {
+            event.preventDefault();
+            zoomCanvasTo(1);
+            return;
+        }
+
+        if (event.key.toLowerCase() === "f") {
+            event.preventDefault();
+            fitWorldView();
+            return;
+        }
+
         if (event.key !== " " || isTextInputTarget(event.target)) {
             return;
         }
@@ -1654,11 +2140,12 @@ if (form && formStatus) {
             focusCanvasOnCoordinate(savedMark.x, savedMark.y, 1.45);
             await refreshRecentMarks();
             if (undoButton) {
-                undoButton.disabled = false;
+                setUndoMarkAvailable(true, savedMark.uid);
             }
             form.reset();
             clearDrawing();
             updateShapePreviewColor();
+            updateCharacterCounts();
             xField.value = "";
             yField.value = "";
             if (placementMarker) {
@@ -1677,15 +2164,28 @@ if (form && formStatus) {
 
 if (undoButton && formStatus) {
     undoButton.addEventListener("click", async () => {
-        undoButton.disabled = true;
+        const targetUid = undoButton.dataset.lastMarkUid || "";
+        if (!undoMarkAvailable || targetUid === "") {
+            setUndoMarkAvailable(false);
+            return;
+        }
+
+        const targetMark = marks.find((mark) => mark.dataset.uid === targetUid);
+        setUndoMarkAvailable(false);
         formStatus.classList.remove("error");
-        formStatus.textContent = "Undoing your latest mark...";
+        formStatus.textContent = "Returning to your latest mark...";
 
         const body = new FormData();
         body.append("action", "undo");
         body.append("csrf_token", undoButton.dataset.csrfToken || "");
 
         try {
+            if (targetMark) {
+                hideMarkPopout();
+                focusMark(targetMark, 1.65, { showPopout: false });
+                await wait(620);
+            }
+
             const response = await fetch("/api/marks.php", {
                 method: "POST",
                 body,
@@ -1696,14 +2196,40 @@ if (undoButton && formStatus) {
                 throw new Error(payload.error || "Unable to undo your latest mark.");
             }
 
+            formStatus.textContent = "Removing your latest mark...";
+            if (targetMark) {
+                await animateUndoMark(targetMark);
+                removeMarkElement(targetMark);
+            } else {
+                await refreshRecentMarks();
+            }
+            await refreshRecentMarks();
+            setUndoMarkAvailable(false);
             formStatus.textContent = "Latest mark removed.";
-            window.location.reload();
         } catch (error) {
+            targetMark?.classList.remove("is-undoing");
             formStatus.classList.add("error");
             formStatus.textContent = error.message;
-            undoButton.disabled = false;
+            setUndoMarkAvailable(false);
         }
     });
 }
+
+document.addEventListener("click", (event) => {
+    if (!markPopout || markPopout.hidden) {
+        return;
+    }
+
+    if (suppressNextDocumentClick) {
+        suppressNextDocumentClick = false;
+        return;
+    }
+
+    if (event.target.closest("[data-mark-popout]") || event.target.closest(".mark-dot") || event.target.closest("[data-recent-uid]")) {
+        return;
+    }
+
+    hideMarkPopout();
+});
 
 startLiveUpdates();

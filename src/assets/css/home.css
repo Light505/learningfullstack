@@ -50,20 +50,18 @@ textarea {
     margin-bottom: 12px;
 }
 
-.eyebrow {
-    margin: 0 0 6px;
-    color: #76624a;
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
 h1 {
     margin: 0;
     font-size: 2.8rem;
     line-height: 0.95;
     letter-spacing: 0;
+}
+
+.page-subtitle {
+    margin: 8px 0 0;
+    color: #76624a;
+    font-size: 0.98rem;
+    font-weight: 700;
 }
 
 .entry-count {
@@ -123,6 +121,31 @@ h1 {
     flex-wrap: wrap;
 }
 
+.toolbar-section {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.toolbar-section[hidden] {
+    display: none;
+}
+
+.zoom-controls {
+    margin-left: auto;
+}
+
+.undo-tools {
+    padding-left: 8px;
+    border-left: 1px solid rgba(61, 48, 36, 0.16);
+}
+
+.export-tools {
+    padding-left: 8px;
+    border-left: 1px solid rgba(61, 48, 36, 0.16);
+}
+
 .tool-button,
 .icon-button,
 .submit-preview {
@@ -158,16 +181,30 @@ h1 {
     color: #fff8eb;
 }
 
-.zoom-controls {
-    display: inline-flex;
-    gap: 6px;
-    margin-left: auto;
+.tool-button.warning {
+    color: #7b3b2f;
 }
 
 .icon-button {
     display: inline-grid;
     place-items: center;
     width: 38px;
+}
+
+.zoom-readout {
+    display: inline-grid;
+    place-items: center;
+    min-width: 58px;
+    min-height: 38px;
+    padding: 0 10px;
+    border: 1px solid rgba(61, 48, 36, 0.16);
+    border-radius: 8px;
+    background: rgba(255, 248, 235, 0.62);
+    color: #5f4c38;
+    font-size: 0.84rem;
+    font-weight: 800;
+    line-height: 1;
+    white-space: nowrap;
 }
 
 .tool-button svg,
@@ -266,6 +303,62 @@ textarea:disabled {
     position: absolute;
     inset: 0;
     pointer-events: none;
+}
+
+.map-clusters {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+}
+
+.map-cluster {
+    position: absolute;
+    left: var(--cluster-x);
+    top: var(--cluster-y);
+    display: none;
+    place-items: center;
+    width: calc(var(--cluster-screen-size) / max(var(--canvas-zoom), 0.01));
+    height: calc(var(--cluster-screen-size) / max(var(--canvas-zoom), 0.01));
+    border: calc(2px / max(var(--canvas-zoom), 0.01)) solid rgba(255, 248, 235, 0.86);
+    border-radius: 999px;
+    background: var(--cluster-color);
+    color: #fff8eb;
+    font-size: calc(12px / max(var(--canvas-zoom), 0.01));
+    font-weight: 800;
+    line-height: 1;
+    box-shadow:
+        0 0 0 calc(5px / max(var(--canvas-zoom), 0.01)) color-mix(in srgb, var(--cluster-color), transparent 72%),
+        0 calc(8px / max(var(--canvas-zoom), 0.01)) calc(18px / max(var(--canvas-zoom), 0.01)) rgba(0, 0, 0, 0.22);
+    cursor: pointer;
+    pointer-events: auto;
+    transform: translate(-50%, -50%);
+}
+
+.mark-canvas.is-map-view .map-cluster {
+    display: grid;
+}
+
+.map-cluster.square {
+    border-radius: calc(5px / max(var(--canvas-zoom), 0.01));
+}
+
+.map-cluster.diamond {
+    border-radius: calc(5px / max(var(--canvas-zoom), 0.01));
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.map-cluster.diamond.is-multi::before {
+    content: attr(data-count);
+    transform: rotate(-45deg);
+}
+
+.map-cluster.diamond.is-multi {
+    color: transparent;
+}
+
+.map-cluster:empty::before {
+    content: "";
 }
 
 .canvas-tile {
@@ -466,6 +559,18 @@ textarea:disabled {
     animation: mark-ring 760ms ease-out;
 }
 
+.mark-dot.is-undoing {
+    pointer-events: none;
+}
+
+.mark-dot.is-undoing::before {
+    animation: mark-dust 720ms ease forwards;
+}
+
+.mark-dot.is-undoing::after {
+    animation: mark-dust-ring 720ms ease forwards;
+}
+
 .mark-dot.diamond:hover::before,
 .mark-dot.diamond:focus-visible::before,
 .mark-dot.diamond[data-selected="true"]::before {
@@ -516,12 +621,14 @@ textarea:disabled {
     left: var(--placement-x);
     top: var(--placement-y);
     z-index: 4;
-    width: 34px;
-    height: 34px;
+    width: 42px;
+    height: 42px;
     border: 2px dashed rgba(47, 42, 34, 0.72);
     border-radius: 999px;
-    background: rgba(255, 248, 235, 0.5);
-    box-shadow: 0 0 0 8px rgba(47, 42, 34, 0.08), 0 8px 22px rgba(0, 0, 0, 0.12);
+    background: color-mix(in srgb, var(--selected-mark-color, #d9826b), transparent 62%);
+    box-shadow:
+        0 0 0 8px color-mix(in srgb, var(--selected-mark-color, #d9826b), transparent 82%),
+        0 8px 22px rgba(0, 0, 0, 0.12);
     pointer-events: none;
     transform: translate(-50%, -50%);
 }
@@ -531,11 +638,88 @@ textarea:disabled {
     position: absolute;
     left: 50%;
     top: 50%;
-    width: 8px;
-    height: 8px;
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 248, 235, 0.82);
     border-radius: 999px;
-    background: #2f2a22;
+    background: var(--selected-mark-color, #d9826b);
+    opacity: 0.82;
     transform: translate(-50%, -50%);
+}
+
+.placement-marker.square,
+.placement-marker.square::after {
+    border-radius: 5px;
+}
+
+.placement-marker.diamond {
+    border-radius: 7px;
+}
+
+.placement-marker.diamond::after {
+    border-radius: 4px;
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.mark-popout {
+    position: absolute;
+    left: var(--popout-x, 50%);
+    top: var(--popout-y, 50%);
+    z-index: 7;
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr);
+    gap: 12px;
+    width: min(340px, calc(100% - 28px));
+    padding: 14px;
+    border: 1px solid rgba(255, 248, 235, 0.5);
+    border-radius: 8px;
+    background: rgba(41, 33, 25, 0.88);
+    color: #fff8eb;
+    box-shadow: 0 18px 38px rgba(41, 32, 24, 0.3);
+    backdrop-filter: blur(4px);
+    transform: translate(-50%, calc(-100% - 18px));
+}
+
+.mark-popout[hidden] {
+    display: none;
+}
+
+.mark-popout::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -9px;
+    width: 16px;
+    height: 16px;
+    background: rgba(41, 33, 25, 0.88);
+    transform: translateX(-50%) rotate(45deg);
+}
+
+.mark-popout .preview-chip {
+    margin: 0;
+}
+
+.mark-popout h2 {
+    margin: 0 0 6px;
+    font-size: 1.18rem;
+    line-height: 1.2;
+}
+
+.mark-popout p {
+    margin: 0 0 10px;
+    color: rgba(255, 248, 235, 0.84);
+    font-size: 0.92rem;
+    line-height: 1.4;
+}
+
+.mark-popout small {
+    color: rgba(255, 248, 235, 0.68);
+}
+
+.mark-popout .preview-drawing {
+    margin-bottom: 10px;
+    border-color: rgba(255, 248, 235, 0.2);
+    background: rgba(255, 250, 241, 0.92);
 }
 
 .side-panel {
@@ -642,6 +826,19 @@ textarea:disabled {
 .mark-preview small,
 .prototype-note {
     color: var(--muted);
+}
+
+.field-label-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.field-label-row small {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 700;
 }
 
 .compose-preview label:not(.swatch-option):not(.shape-option) {
@@ -979,6 +1176,7 @@ textarea {
 }
 
 .recent-dot {
+    position: relative;
     width: 13px;
     height: 13px;
     margin-top: 4px;
@@ -986,6 +1184,15 @@ textarea {
     border-radius: 999px;
     background: var(--mark-color);
     box-shadow: 0 0 0 4px rgba(61, 48, 36, 0.06);
+}
+
+.recent-dot.square {
+    border-radius: 3px;
+}
+
+.recent-dot.diamond {
+    border-radius: 3px;
+    transform: rotate(45deg);
 }
 
 .recent-list strong {
@@ -1098,9 +1305,45 @@ textarea {
     }
 }
 
+@keyframes mark-dust {
+    0% {
+        opacity: 1;
+        filter: saturate(1.15) brightness(1.08);
+        transform: scale(1.12);
+    }
+
+    48% {
+        opacity: 0.72;
+        filter: saturate(0.7) brightness(1.18);
+        box-shadow:
+            0 0 0 14px color-mix(in srgb, var(--mark-color), transparent 78%),
+            0 14px 30px rgba(0, 0, 0, 0.14),
+            inset 0 1px 3px rgba(255, 255, 255, 0.35);
+    }
+
+    100% {
+        opacity: 0;
+        filter: saturate(0.25) brightness(1.35) blur(1px);
+        transform: translateY(-10px) scale(1.55);
+        box-shadow:
+            -16px -8px 0 -8px color-mix(in srgb, var(--mark-color), transparent 30%),
+            14px -3px 0 -9px color-mix(in srgb, var(--mark-color), transparent 42%),
+            3px 14px 0 -10px color-mix(in srgb, var(--mark-color), transparent 55%);
+    }
+}
+
+@keyframes mark-dust-ring {
+    to {
+        opacity: 0;
+        transform: scale(1.8);
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .mark-dot[data-new="true"]::before,
-    .mark-dot[data-new="true"]::after {
+    .mark-dot[data-new="true"]::after,
+    .mark-dot.is-undoing::before,
+    .mark-dot.is-undoing::after {
         animation: none;
     }
 }
