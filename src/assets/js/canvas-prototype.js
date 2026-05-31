@@ -44,7 +44,6 @@ let panStart = null;
 let keyboardPanActive = false;
 let suppressNextCanvasClick = false;
 const tileSize = 100;
-const tilePixelSize = 1024;
 const committedTiles = new Set(["0,0"]);
 let worldBounds = { minX: 0, maxX: tileSize, minY: 0, maxY: tileSize };
 let viewAnimation = null;
@@ -72,12 +71,12 @@ function clampCanvasView() {
     }
 
     const rect = canvas.getBoundingClientRect();
-    const worldWidth = tilePixelSize * (worldBounds.maxX - worldBounds.minX) / tileSize;
-    const worldHeight = tilePixelSize * (worldBounds.maxY - worldBounds.minY) / tileSize;
+    const worldWidth = rect.width * (worldBounds.maxX - worldBounds.minX) / tileSize;
+    const worldHeight = rect.height * (worldBounds.maxY - worldBounds.minY) / tileSize;
     const minPanX = Math.min(0, rect.width - (worldWidth * canvasView.zoom));
     const minPanY = Math.min(0, rect.height - (worldHeight * canvasView.zoom));
-    const maxPanX = Math.max(0, -worldBounds.minX / tileSize * tilePixelSize * canvasView.zoom);
-    const maxPanY = Math.max(0, -worldBounds.minY / tileSize * tilePixelSize * canvasView.zoom);
+    const maxPanX = Math.max(0, -worldBounds.minX / tileSize * rect.width * canvasView.zoom);
+    const maxPanY = Math.max(0, -worldBounds.minY / tileSize * rect.height * canvasView.zoom);
 
     canvasView.panX = Math.max(minPanX, Math.min(maxPanX, canvasView.panX));
     canvasView.panY = Math.max(minPanY, Math.min(maxPanY, canvasView.panY));
@@ -171,8 +170,8 @@ function applyWorldGeometry() {
         return;
     }
 
-    canvas.style.setProperty("--canvas-world-width", `${((worldBounds.maxX - worldBounds.minX) / tileSize) * tilePixelSize}px`);
-    canvas.style.setProperty("--canvas-world-height", `${((worldBounds.maxY - worldBounds.minY) / tileSize) * tilePixelSize}px`);
+    canvas.style.setProperty("--canvas-world-width", `${worldBounds.maxX - worldBounds.minX}%`);
+    canvas.style.setProperty("--canvas-world-height", `${worldBounds.maxY - worldBounds.minY}%`);
     renderCanvasTiles();
 }
 
@@ -202,8 +201,8 @@ function positionPlacementMarker() {
         const rect = canvas.getBoundingClientRect();
         const x = Number.parseFloat(xField.value);
         const y = Number.parseFloat(yField.value);
-        const screenX = canvasView.panX + (((x - worldBounds.minX) / tileSize) * tilePixelSize * canvasView.zoom);
-        const screenY = canvasView.panY + (((y - worldBounds.minY) / tileSize) * tilePixelSize * canvasView.zoom);
+        const screenX = canvasView.panX + (((x - worldBounds.minX) / tileSize) * rect.width * canvasView.zoom);
+        const screenY = canvasView.panY + (((y - worldBounds.minY) / tileSize) * rect.height * canvasView.zoom);
 
         placementMarker.style.setProperty("--placement-x", `${(screenX / rect.width) * 100}%`);
         placementMarker.style.setProperty("--placement-y", `${(screenY / rect.height) * 100}%`);
@@ -328,8 +327,8 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
 
     animateCanvasViewTo({
         zoom,
-        panX: (rect.width / 2) - (((x - worldBounds.minX) / tileSize) * tilePixelSize * zoom),
-        panY: (rect.height / 2) - (((y - worldBounds.minY) / tileSize) * tilePixelSize * zoom),
+        panX: (rect.width / 2) - (((x - worldBounds.minX) / tileSize) * rect.width * zoom),
+        panY: (rect.height / 2) - (((y - worldBounds.minY) / tileSize) * rect.height * zoom),
     });
 }
 
@@ -360,8 +359,8 @@ function resetCanvasView() {
     const rect = canvas.getBoundingClientRect();
     canvasView = {
         zoom: 1,
-        panX: (worldBounds.minX / tileSize) * tilePixelSize,
-        panY: (worldBounds.minY / tileSize) * tilePixelSize,
+        panX: (worldBounds.minX / tileSize) * rect.width,
+        panY: (worldBounds.minY / tileSize) * rect.height,
     };
     applyCanvasView();
 }
@@ -369,18 +368,18 @@ function resetCanvasView() {
 function canvasPointFromEvent(event) {
     const rect = canvas.getBoundingClientRect();
     return {
-        x: worldBounds.minX + ((((event.clientX - rect.left - canvasView.panX) / canvasView.zoom) / tilePixelSize) * tileSize),
-        y: worldBounds.minY + ((((event.clientY - rect.top - canvasView.panY) / canvasView.zoom) / tilePixelSize) * tileSize),
+        x: worldBounds.minX + ((((event.clientX - rect.left - canvasView.panX) / canvasView.zoom) / rect.width) * tileSize),
+        y: worldBounds.minY + ((((event.clientY - rect.top - canvasView.panY) / canvasView.zoom) / rect.height) * tileSize),
     };
 }
 
 function visibleWorldBounds() {
     const rect = canvas.getBoundingClientRect();
     return {
-        minX: Math.max(minCoordinate, worldBounds.minX + (((0 - canvasView.panX) / canvasView.zoom / tilePixelSize) * tileSize)),
-        maxX: Math.min(maxCoordinate, worldBounds.minX + (((rect.width - canvasView.panX) / canvasView.zoom / tilePixelSize) * tileSize)),
-        minY: Math.max(minCoordinate, worldBounds.minY + (((0 - canvasView.panY) / canvasView.zoom / tilePixelSize) * tileSize)),
-        maxY: Math.min(maxCoordinate, worldBounds.minY + (((rect.height - canvasView.panY) / canvasView.zoom / tilePixelSize) * tileSize)),
+        minX: Math.max(minCoordinate, worldBounds.minX + (((0 - canvasView.panX) / canvasView.zoom / rect.width) * tileSize)),
+        maxX: Math.min(maxCoordinate, worldBounds.minX + (((rect.width - canvasView.panX) / canvasView.zoom / rect.width) * tileSize)),
+        minY: Math.max(minCoordinate, worldBounds.minY + (((0 - canvasView.panY) / canvasView.zoom / rect.height) * tileSize)),
+        maxY: Math.min(maxCoordinate, worldBounds.minY + (((rect.height - canvasView.panY) / canvasView.zoom / rect.height) * tileSize)),
     };
 }
 

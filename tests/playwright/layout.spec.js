@@ -348,8 +348,8 @@ test.describe("responsive app layout", () => {
       };
     });
 
-    expect(expandedWorld.width).toBe(3072);
-    expect(expandedWorld.height).toBe(3072);
+    expect(expandedWorld.width).toBe(300);
+    expect(expandedWorld.height).toBe(300);
     expect(expandedWorld.tileCount).toBe(9);
   });
 
@@ -435,8 +435,8 @@ test.describe("responsive app layout", () => {
       };
     });
 
-    expect(world.width).toBeGreaterThan(1024);
-    expect(world.height).toBeGreaterThan(1024);
+    expect(world.width).toBeGreaterThan(100);
+    expect(world.height).toBeGreaterThan(100);
     expect(world.markX).toBeGreaterThan(0);
     expect(world.markY).toBeGreaterThan(0);
   });
