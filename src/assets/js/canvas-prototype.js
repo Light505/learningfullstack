@@ -246,6 +246,39 @@ function updatePanMomentum(clientX, clientY, currentTime) {
     panMomentum.lastTime = now;
 }
 
+function applyPanMomentum() {
+    cancelPanMomentum();
+
+    const { friction, minVelocity, maxVelocity, settleThreshold } = momentumConfig;
+    let velocityX = panMomentum.velocityX;
+    let velocityY = panMomentum.velocityY;
+
+    if (Math.abs(velocityX) < minVelocity && Math.abs(velocityY) < minVelocity) {
+        settleCanvasView();
+        return;
+    }
+
+    const step = () => {
+        velocityX *= friction;
+        velocityY *= friction;
+
+        if (Math.abs(velocityX) < minVelocity && Math.abs(velocityY) < minVelocity) {
+            panMomentumAnimation = null;
+            settleCanvasView();
+            return;
+        }
+
+        const { minPanX, maxPanX, minPanY, maxPanY } = canvasPanBounds();
+        canvasView.panX = rubberbandPan(canvasView.panX + velocityX, minPanX, maxPanX);
+        canvasView.panY = rubberbandPan(canvasView.panY + velocityY, minPanY, maxPanY);
+        applyCanvasView({ clamp: false });
+
+        panMomentumAnimation = window.requestAnimationFrame(step);
+    };
+
+    panMomentumAnimation = window.requestAnimationFrame(step);
+}
+
 function isDoubleTap(event) {
     const now = performance.now();
     const timeDelta = now - lastTap.time;
@@ -2298,6 +2331,8 @@ if (canvas && xField && yField && placementNote) {
 
         event.preventDefault();
         cancelCanvasViewAnimation();
+        cancelPanMomentum();
+        resetPanMomentum();
         panStart = {
             pointerId: event.pointerId,
             clientX: event.clientX,
@@ -2326,6 +2361,7 @@ if (canvas && xField && yField && placementNote) {
             suppressNextDocumentClick = true;
         }
 
+        updatePanMomentum(event.clientX, event.clientY);
         const { minPanX, maxPanX, minPanY, maxPanY } = canvasPanBounds();
         canvasView.panX = rubberbandPan(panStart.panX + deltaX, minPanX, maxPanX);
         canvasView.panY = rubberbandPan(panStart.panY + deltaY, minPanY, maxPanY);
@@ -2338,7 +2374,9 @@ if (canvas && xField && yField && placementNote) {
             if (panStart && panStart.pointerId === event.pointerId) {
                 panStart = null;
                 canvas.classList.remove("is-panning");
-                settleCanvasView();
+                if (eventName !== "pointercancel") {
+                    applyPanMomentum();
+                }
             }
             if (eventName === "pointerleave") {
                 clearPlacementState();
@@ -2387,6 +2425,35 @@ if (canvas && xField && yField && placementNote) {
             placementNote.textContent = "The wall is crowded here. Try choosing a spot manually.";
         });
     }
+
+    canvas.addEventListener("touchstart", (event) => {
+        if (event.target.closest(".canvas-hint") || event.target.closest(".mark-dot")) {
+            return;
+        }
+        if (event.touches.length >= 2) {
+            event.preventDefault();
+            handlePinchStart(event.touches);
+        }
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", (event) => {
+        if (event.touches.length >= 2 && pinchState) {
+            event.preventDefault();
+            handlePinchMove(event.touches);
+        }
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", (event) => {
+        if (event.touches.length < 2 && pinchState) {
+            handlePinchEnd();
+        }
+    });
+
+    canvas.addEventListener("touchcancel", (event) => {
+        if (pinchState) {
+            handlePinchEnd();
+        }
+    });
 
     canvas.addEventListener("wheel", (event) => {
         if (event.target.closest(".canvas-hint")) {
