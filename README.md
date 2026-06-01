@@ -1,10 +1,10 @@
 # I was here
 
-A small PHP/MySQL web app where visitors leave a mark on a shared canvas.
+A PHP/MySQL canvas guestbook. Visitors choose an explored spot on a shared
+201x201 tile world and leave a name, message or drawing, color, and shape.
 
-Marks can include a display name, short message, optional drawing, color, shape,
-and canvas position. The app uses Docker for local development and production
-image builds.
+The app uses plain PHP, Apache, MySQL, CSS, browser JavaScript, Docker Compose,
+and Playwright.
 
 ## Quick Start
 
@@ -23,6 +23,15 @@ http://localhost:8081
 
 Docker Compose loads `docker-compose.override.yml` automatically for local
 development. That starts the web app, MySQL, and phpMyAdmin.
+
+## App Behavior
+
+- Marks are saved in MySQL and loaded through `src/api/marks.php`.
+- Server-Sent Events in `src/api/marks-stream.php` keep browsers synced.
+- The canvas starts at tile `0,0`; saved marks reveal that tile and its eight
+  neighbors.
+- Unexplored but visible tiles are fogged and unavailable for placement.
+- Users can undo their latest mark in the current PHP session.
 
 ## Checks
 
@@ -52,5 +61,4 @@ docker-compose.web.yml       VPS web stack
 - [Local development](docs/local-development.md)
 - [Deployment](docs/deployment.md)
 - [Roadmap](docs/roadmap.md)
-- [Handoff](docs/handoff.md)
 - [Moderation and safety](docs/moderation-safety.md)

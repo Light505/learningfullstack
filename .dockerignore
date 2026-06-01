@@ -12,9 +12,20 @@ docs/
 
 logs/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.bak
+.phpunit.result.cache
 node_modules/
 vendor/
 coverage/
+playwright-report/
+test-results/
+.playwright/
+dist/
+build/
 __tests__/
 
 .vscode/

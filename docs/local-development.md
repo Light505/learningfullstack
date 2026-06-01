@@ -1,7 +1,5 @@
 # Local Development
 
-Use this on your Windows machine while building the app.
-
 ## Start
 
 ```powershell
@@ -17,30 +15,27 @@ http://localhost:8080
 http://localhost:8081
 ```
 
-The only local environment file should be `.env`. Compose loads it
-automatically, so local startup should stay:
-
-```powershell
-docker compose up -d
-```
-
-Later, local secrets should move to Windows 11 user environment variables.
+Compose loads `docker-compose.override.yml` automatically for local development.
+That starts the web app, MySQL, and phpMyAdmin. Keep local secrets in `.env`,
+created from the example file.
 
 ## Database
 
 Schema files live in `database/init.sql` and `database/migrations/`.
 
-Apply migrations after creating a fresh local database volume:
+Apply migrations after creating a fresh local database volume or pulling new
+migration files:
 
 ```powershell
 .\scripts\apply-migrations.ps1
 ```
 
-To reset the local database:
+Reset local database data:
 
 ```powershell
 docker compose down --remove-orphans -v
 docker compose up -d --build
+.\scripts\apply-migrations.ps1
 ```
 
 ## Checks
@@ -53,7 +48,7 @@ docker compose up -d --build
 npm run test:playwright
 ```
 
-## Image Publishing
+## Build And Push
 
 Log in to GHCR once:
 

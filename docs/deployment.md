@@ -1,15 +1,13 @@
 # Deployment
 
-Production runs from a pushed GHCR image. The VPS should not build the app from
-source.
+Production runs from a GHCR image. The VPS should not build from source.
 
-## Image Tags
+## Tags
 
 ```text
 sha-<short-commit-sha>  exact commit image
 main                    latest pushed main image
 prod                    production image watched by Watchtower
-test                    temporary test image
 ```
 
 ## Web VPS Files
@@ -53,10 +51,9 @@ docker compose -f docker-compose.web.yml down --remove-orphans
 
 Do not add `-v` unless you intentionally want to delete Traefik certificates.
 
-## Database VPS
+## Database
 
-MySQL is installed directly on the database VPS, not through Compose.
-
+The documented production direction keeps MySQL outside the web Compose stack.
 Apply schema from:
 
 ```text
@@ -64,7 +61,7 @@ database/init.sql
 database/migrations/
 ```
 
-The database firewall should allow port `3306` only from the web VPS.
+Allow port `3306` only from the web VPS.
 
 ## Verify
 
