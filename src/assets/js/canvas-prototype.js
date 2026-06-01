@@ -87,6 +87,177 @@ let renderedClusterMode = false;
 const markPositions = new Map();
 let canvasHintTimer = null;
 const markPreview = document.querySelector(".mark-preview");
+let panMomentum = { velocityX: 0, velocityY: 0, lastX: 0, lastY: 0, lastTime: 0 };
+let panMomentumAnimation = null;
+const momentumConfig = {
+    friction: 0.92,
+    minVelocity: 0.5,
+    maxVelocity: 50,
+};
+let lastTap = { time: 0, x: 0, y: 0 };
+const doubleTapConfig = {
+    maxDelay: 300,
+    maxDistance: 20,
+};
+let pinchState = null;
+const pinchConfig = {
+    minDistance: 20,
+};
+
+function isTouchDevice() {
+    return "ontouchstart" in window || navigator.maxTouchPoints > 0;
+}
+
+const inputConfig = {
+    panThreshold: 3,
+    clickThreshold: 3,
+    doubleTapTimeout: 300,
+    doubleTapZoomLevel: 1,
+    keyboardPanSpeed: 8,
+    arrowPanSpeed: 50,
+    touch: {
+        panThreshold: 10,
+        clickThreshold: 15,
+        snapTolerance: 12,
+        pinchSensitivity: 1.5,
+    },
+    desktop: {
+        panThreshold: 3,
+        clickThreshold: 3,
+        snapTolerance: 4,
+        pinchSensitivity: 1.0,
+    },
+};
+
+function getInputConfig() {
+    const config = isTouchDevice() ? inputConfig.touch : inputConfig.desktop;
+    return {
+        ...inputConfig,
+        panThreshold: config.panThreshold,
+        clickThreshold: config.clickThreshold,
+        snapTolerance: config.snapTolerance,
+        pinchSensitivity: config.pinchSensitivity,
+    };
+}
+
+function cancelPanMomentum() {
+    if (panMomentumAnimation) {
+        window.cancelAnimationFrame(panMomentumAnimation);
+        panMomentumAnimation = null;
+    }
+    panMomentum.velocityX = 0;
+    panMomentum.velocityY = 0;
+}
+
+function resetPanMomentum() {
+    panMomentum.velocityX = 0;
+    panMomentum.velocityY = 0;
+    panMomentum.lastX = 0;
+    panMomentum.lastY = 0;
+    panMomentum.lastTime = 0;
+}
+
+function updatePanMomentum(clientX, clientY, currentTime) {
+    const now = currentTime || performance.now();
+    if (panMomentum.lastTime > 0) {
+        const dt = Math.max(1, now - panMomentum.lastTime);
+        let vx = (clientX - panMomentum.lastX) / dt;
+        let vy = (clientY - panMomentum.lastY) / dt;
+        const { maxVelocity } = momentumConfig;
+        vx = Math.max(-maxVelocity, Math.min(maxVelocity, vx));
+        vy = Math.max(-maxVelocity, Math.min(maxVelocity, vy));
+        panMomentum.velocityX = vx;
+        panMomentum.velocityY = vy;
+    }
+    panMomentum.lastX = clientX;
+    panMomentum.lastY = clientY;
+    panMomentum.lastTime = now;
+}
+
+function isDoubleTap(event) {
+    const now = performance.now();
+    const timeDelta = now - lastTap.time;
+    if (timeDelta > doubleTapConfig.maxDelay) {
+        lastTap.time = now;
+        lastTap.x = event.clientX;
+        lastTap.y = event.clientY;
+        return false;
+    }
+    const dist = Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y);
+    if (dist > doubleTapConfig.maxDistance) {
+        lastTap.time = now;
+        lastTap.x = event.clientX;
+        lastTap.y = event.clientY;
+        return false;
+    }
+    lastTap.time = 0;
+    return true;
+}
+
+function getPinchStateFromTouches(touches) {
+    if (touches.length < 2) {
+        return null;
+    }
+    const t0 = touches[0];
+    const t1 = touches[1];
+    const midX = (t0.clientX + t1.clientX) / 2;
+    const midY = (t0.clientY + t1.clientY) / 2;
+    const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+    return { t0, t1, midX, midY, dist };
+}
+
+function handlePinchStart(touches) {
+    if (leafletMap) {
+        return;
+    }
+    const pinch = getPinchStateFromTouches(touches);
+    if (!pinch) {
+        return;
+    }
+    cancelCanvasViewAnimation();
+    cancelPanMomentum();
+    resetPanMomentum();
+    pinchState = {
+        startDist: pinch.dist,
+        startZoom: canvasView.zoom,
+        midX: pinch.midX,
+        midY: pinch.midY,
+    };
+}
+
+function handlePinchMove(touches) {
+    if (!pinchState || leafletMap) {
+        return;
+    }
+    const pinch = getPinchStateFromTouches(touches);
+    if (!pinch) {
+        return;
+    }
+    const scale = pinch.dist / pinchState.startDist;
+    const config = getInputConfig();
+    const adjustedScale = Math.pow(scale, config.pinchSensitivity);
+    const newZoom = clampZoom(pinchState.startZoom * adjustedScale);
+    const rect = canvas.getBoundingClientRect();
+    const origin = {
+        x: pinch.midX - rect.left,
+        y: pinch.midY - rect.top,
+    };
+    const worldX = (origin.x - canvasView.panX) / canvasView.zoom;
+    const worldY = (origin.y - canvasView.panY) / canvasView.zoom;
+    canvasView.zoom = newZoom;
+    canvasView.panX = origin.x - (worldX * newZoom);
+    canvasView.panY = origin.y - (worldY * newZoom);
+    applyCanvasView({ clamp: false });
+    leaveFitWorldMode();
+}
+
+function handlePinchEnd() {
+    if (!pinchState) {
+        return;
+    }
+    pinchState = null;
+    settleCanvasView();
+}
 
 function setActiveTool(activeButton) {
     [placeButton, randomButton].forEach((button) => {
@@ -654,6 +825,23 @@ function easeOutCubic(progress) {
     return 1 - Math.pow(1 - progress, 3);
 }
 
+function easeOutExpo(progress) {
+    return progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+}
+
+function easeOutElastic(progress) {
+    const c4 = (2 * Math.PI) / 3;
+    if (progress === 0) return 0;
+    if (progress === 1) return 1;
+    return Math.pow(2, -10 * progress) * Math.sin((progress * 10 - 0.75) * c4) + 1;
+}
+
+function easeInOutCubic(progress) {
+    return progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+}
+
 function cancelCanvasViewAnimation() {
     if (!viewAnimation) {
         return;
@@ -683,18 +871,25 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
 
     cancelCanvasViewAnimation();
 
+    if (duration <= 0) {
+        canvasView = nextView;
+        applyCanvasView(options);
+        return;
+    }
+
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         canvasView = nextView;
         applyCanvasView(options);
         return;
     }
 
+    const easingFn = options.easing || easeOutCubic;
     const startView = { ...canvasView };
     const startedAt = performance.now();
 
     const step = (now) => {
         const progress = Math.min(1, (now - startedAt) / duration);
-        const eased = easeOutCubic(progress);
+        const eased = easingFn(progress);
 
         canvasView = {
             zoom: startView.zoom + ((nextView.zoom - startView.zoom) * eased),
