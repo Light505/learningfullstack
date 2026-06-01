@@ -11,7 +11,7 @@ function mark_limits(): array
         'allowed_shapes' => ['circle', 'square', 'diamond'],
         'min_distance_percent' => 46.08,
         'min_coordinate_percent' => -102400,
-        'max_coordinate_percent' => 102400,
+        'max_coordinate_percent' => 103424,
     ];
 }
 

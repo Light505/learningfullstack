@@ -53,7 +53,7 @@ $cases = [
         'expected' => null,
     ],
     'x position is bounded' => [
-        'input' => array_merge($valid, ['x_percent' => 102400.5]),
+        'input' => array_merge($valid, ['x_percent' => 103424.5]),
         'expected' => 'Mark X position must be within the canvas bounds.',
     ],
     'y position is bounded' => [

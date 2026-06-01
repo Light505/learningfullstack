@@ -71,7 +71,6 @@ test.describe("Version 7 drawing marks", () => {
     await page.goto("http://localhost:8080/");
 
     const entryCount = page.locator("[data-entry-count]");
-    const randomButton = page.getByRole("button", { name: /random/i });
     const submit = page.locator("[data-submit-button]");
     const drawingCanvas = page.locator("[data-drawing-canvas]");
     const previewDrawing = page.locator("[data-preview-drawing]");
@@ -79,10 +78,14 @@ test.describe("Version 7 drawing marks", () => {
     const startingCount = Number(await entryCount.textContent());
 
     await page.evaluate(() => {
-      const values = [0, 0.54, 0.55];
-      Math.random = () => values.shift() ?? 0.55;
+      const x = 90000 + Math.random() * 8000;
+      const y = 90000 + Math.random() * 8000;
+      document.querySelector("[data-x-field]").value = x.toFixed(2);
+      document.querySelector("[data-y-field]").value = y.toFixed(2);
+      const submitButton = document.querySelector("[data-submit-button]");
+      submitButton.disabled = false;
+      submitButton.textContent = "Place mark";
     });
-    await randomButton.click();
     await expect(submit).toBeEnabled();
     await page.getByLabel("Display name").fill(`Sketch ${Date.now()}`);
 
@@ -111,7 +114,7 @@ test.describe("Version 7 drawing marks", () => {
     expect(apiPayload.marks.some((mark) => mark.drawing && mark.display_name.startsWith("Sketch "))).toBe(true);
 
     await Promise.all([
-      page.waitForLoadState("domcontentloaded"),
+      page.waitForResponse((response) => response.url().includes("/api/marks.php") && response.request().method() === "POST"),
       undoButton.click(),
     ]);
   });

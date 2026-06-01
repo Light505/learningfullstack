@@ -250,6 +250,18 @@ textarea:disabled {
     --canvas-world-height: 1024px;
 }
 
+.mark-canvas.is-leaflet-map {
+    cursor: grab;
+}
+
+.mark-canvas.is-leaflet-map .leaflet-pane {
+    z-index: 100;
+}
+
+.mark-canvas.is-leaflet-map .leaflet-control-container {
+    display: none;
+}
+
 .mark-canvas[data-nav="pan"] {
     cursor: grab;
 }
@@ -266,7 +278,7 @@ textarea:disabled {
     content: "";
     position: absolute;
     inset: 0;
-    z-index: 5;
+    z-index: 640;
     border: 2px solid rgba(156, 61, 50, 0.22);
     border-radius: inherit;
     pointer-events: none;
@@ -280,6 +292,7 @@ textarea:disabled {
     position: absolute;
     left: 0;
     top: 0;
+    z-index: 420;
     width: var(--canvas-world-width);
     height: var(--canvas-world-height);
     background-color: #fbfaf5;
@@ -297,6 +310,7 @@ textarea:disabled {
         32px 32px;
     transform: translate(var(--canvas-pan-x), var(--canvas-pan-y)) scale(var(--canvas-zoom));
     transform-origin: 0 0;
+    pointer-events: none;
 }
 
 .canvas-tiles {
@@ -371,6 +385,10 @@ textarea:disabled {
     background: transparent;
 }
 
+.mark-canvas[data-tile-culling="viewport"] .canvas-tile {
+    animation: tile-fade-in 140ms ease both;
+}
+
 .canvas-tile.is-unavailable {
     filter: saturate(0.52) brightness(0.82);
 }
@@ -391,6 +409,66 @@ textarea:disabled {
     pointer-events: none;
 }
 
+.canvas-tile.is-fog {
+    filter: brightness(0.35) saturate(0.2);
+}
+
+.canvas-tile.is-fog::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+        45deg,
+        rgba(20, 18, 15, 0.4) 0,
+        rgba(20, 18, 15, 0.4) 4px,
+        transparent 4px,
+        transparent 24px
+    );
+    pointer-events: none;
+    z-index: 1;
+}
+
+.mark-canvas[data-render-mode="overview"] .canvas-tile.is-overview {
+    border: calc(2px / max(var(--canvas-zoom), 0.01)) solid rgba(47, 42, 34, 0.16);
+    background: rgba(255, 248, 235, 0.1);
+}
+
+.mark-canvas[data-render-mode="overview"] .canvas-tile.is-overview.is-unavailable {
+    border-color: rgba(47, 42, 34, 0.08);
+    background:
+        repeating-linear-gradient(
+            -45deg,
+            rgba(47, 42, 34, 0.13) 0,
+            rgba(47, 42, 34, 0.13) calc(4px / max(var(--canvas-zoom), 0.01)),
+            transparent calc(4px / max(var(--canvas-zoom), 0.01)),
+            transparent calc(28px / max(var(--canvas-zoom), 0.01))
+        ),
+        rgba(47, 42, 34, 0.12);
+    filter: none;
+}
+
+.mark-canvas[data-render-mode="overview"] .canvas-tile.is-overview.is-unavailable::before {
+    content: none;
+}
+
+.mark-canvas[data-render-mode="overview"] .canvas-world::after,
+.mark-canvas[data-render-mode="map"] .canvas-world::after {
+    opacity: 0.42;
+}
+
+.mark-canvas[data-render-mode="map"] .canvas-world {
+    background-image:
+        url("/assets/images/cave-wall-texture.png"),
+        radial-gradient(circle, rgba(81, 70, 58, 0.16) 1px, transparent 1.3px),
+        linear-gradient(rgba(64, 58, 50, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(64, 58, 50, 0.045) 1px, transparent 1px);
+    background-size:
+        1024px 1024px,
+        28px 28px,
+        64px 64px,
+        64px 64px;
+}
+
 .canvas-world::after {
     content: "";
     position: absolute;
@@ -407,7 +485,7 @@ textarea:disabled {
     position: absolute;
     left: 18px;
     top: 18px;
-    z-index: 6;
+    z-index: 720;
     display: flex;
     align-items: start;
     gap: 10px;
@@ -475,6 +553,7 @@ textarea:disabled {
     transform: translate(-50%, -50%);
     cursor: pointer;
     outline: 0;
+    pointer-events: auto;
     transition: transform 160ms ease, filter 160ms ease;
 }
 
@@ -590,7 +669,7 @@ textarea:disabled {
     position: absolute;
     left: 50%;
     top: 50%;
-    z-index: 2;
+    z-index: 430;
     width: min(280px, calc(100% - 32px));
     padding: 18px;
     border: 1px dashed rgba(76, 63, 48, 0.28);
@@ -620,7 +699,7 @@ textarea:disabled {
     position: absolute;
     left: var(--placement-x);
     top: var(--placement-y);
-    z-index: 4;
+    z-index: 650;
     width: 42px;
     height: 42px;
     border: 2px dashed rgba(47, 42, 34, 0.72);
@@ -665,7 +744,7 @@ textarea:disabled {
     position: absolute;
     left: var(--popout-x, 50%);
     top: var(--popout-y, 50%);
-    z-index: 7;
+    z-index: 730;
     display: grid;
     grid-template-columns: 46px minmax(0, 1fr);
     gap: 12px;
@@ -1339,11 +1418,22 @@ textarea {
     }
 }
 
+@keyframes tile-fade-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .mark-dot[data-new="true"]::before,
     .mark-dot[data-new="true"]::after,
     .mark-dot.is-undoing::before,
-    .mark-dot.is-undoing::after {
+    .mark-dot.is-undoing::after,
+    .mark-canvas[data-tile-culling="viewport"] .canvas-tile {
         animation: none;
     }
 }

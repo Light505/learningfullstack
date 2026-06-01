@@ -20,6 +20,14 @@ async function isolateCanvasData(page) {
   });
 }
 
+async function fitWholeWorld(page) {
+  await page.getByLabel("Fit whole world").click();
+  await expect.poll(async () => page.locator("[data-canvas-world]").evaluate((element) => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+    return matrix.a;
+  })).toBeLessThan(0.01);
+}
+
 test.describe("responsive app layout", () => {
   test("places recent marks below the main workspace without sidebar scrolling", async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -155,7 +163,7 @@ test.describe("responsive app layout", () => {
     expect(afterPan.y).toBeLessThan(beforePan.y - 24);
   });
 
-  test("rejects placement outside committed canvas tiles", async ({ page }) => {
+  test("rejects placement outside explored canvas tiles", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
     await page.evaluate(() => {
@@ -417,6 +425,17 @@ test.describe("responsive app layout", () => {
     }
 
     await expect(page.getByLabel("Zoom out")).toBeDisabled();
+
+    for (const expectedZoom of expectedStops.slice(0, -1).reverse()) {
+      await page.keyboard.press("=");
+      await expect.poll(async () => world.evaluate((element) => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+        return matrix.a;
+      })).toBeCloseTo(expectedZoom, 3);
+    }
+
+    await page.keyboard.press("=");
+    await expect.poll(async () => page.getByLabel("Canvas zoom level").textContent()).toBe("100%");
   });
 
   test("fits the whole current world for map navigation", async ({ page }) => {
@@ -754,7 +773,7 @@ test.describe("responsive app layout", () => {
     expect(content).toContain("Export B");
   });
 
-  test("rubberbands camera panning beyond tile bounds", async ({ page }) => {
+  test("rubberbands camera panning beyond full-world bounds", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
     await page.evaluate(() => {
@@ -771,14 +790,14 @@ test.describe("responsive app layout", () => {
     await page.keyboard.down("Shift");
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 1400, box.y + box.height / 2);
+    await page.mouse.move(box.x + box.width / 2 + 120000, box.y + box.height / 2);
 
     const overscrolledPanX = await world.evaluate((element) => {
       const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
       return matrix.m41;
     });
     expect(overscrolledPanX).toBeGreaterThan(0);
-    expect(overscrolledPanX).toBeLessThan(1400);
+    expect(overscrolledPanX).toBeLessThan(6000);
 
     await page.mouse.up();
     await page.keyboard.up("Shift");
@@ -801,7 +820,7 @@ test.describe("responsive app layout", () => {
     await page.keyboard.down("Shift");
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 - 3600, box.y + box.height / 2 - 3600);
+    await page.mouse.move(box.x + box.width / 2 - 260000, box.y + box.height / 2 - 260000);
 
     const lowerOverscroll = await world.evaluate((element) => {
       const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
@@ -827,7 +846,7 @@ test.describe("responsive app layout", () => {
     });
   });
 
-  test("claims a 3x3 area and shades the next frontier", async ({ page }) => {
+  test("reveals a 3x3 explored area and shades the next frontier", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
 
@@ -860,18 +879,17 @@ test.describe("responsive app layout", () => {
       }));
     });
 
+    await fitWholeWorld(page);
+
     const expandedWorld = await canvas.evaluate((element) => {
       const style = getComputedStyle(element);
       const tileRects = Array.from(document.querySelectorAll(".canvas-tile"))
         .map((tile) => {
-          const rect = tile.getBoundingClientRect();
-          const worldRect = document.querySelector("[data-canvas-world]").getBoundingClientRect();
-
           return {
-            left: rect.left - worldRect.left,
-            top: rect.top - worldRect.top,
-            width: rect.width,
-            height: rect.height,
+            left: Number.parseFloat(tile.style.getPropertyValue("--tile-left")),
+            top: Number.parseFloat(tile.style.getPropertyValue("--tile-top")),
+            width: Number.parseFloat(tile.style.getPropertyValue("--tile-width")),
+            height: Number.parseFloat(tile.style.getPropertyValue("--tile-height")),
           };
         })
         .sort((a, b) => a.top - b.top || a.left - b.left);
@@ -886,8 +904,8 @@ test.describe("responsive app layout", () => {
       };
     });
 
-    expect(expandedWorld.width).toBe(5120);
-    expect(expandedWorld.height).toBe(5120);
+    expect(expandedWorld.width).toBe(205824);
+    expect(expandedWorld.height).toBe(205824);
     expect(expandedWorld.tileCount).toBe(25);
     expect(expandedWorld.committedTileCount).toBe(9);
     expect(expandedWorld.unavailableTileCount).toBe(16);
@@ -899,7 +917,7 @@ test.describe("responsive app layout", () => {
     }
   });
 
-  test("turns adjacent shaded tiles normal when a neighboring claimed tile gets a mark", async ({ page }) => {
+  test("turns adjacent fogged tiles normal when a neighboring explored tile gets a mark", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
 
@@ -908,7 +926,7 @@ test.describe("responsive app layout", () => {
         detail: { ok: true, count: 0, marks: [], mark_uids: [] },
       }));
 
-      const borderMark = {
+      const centerMark = {
         uid: `border-${Date.now()}`,
         display_name: "Claim Test",
         message: "Claims nearby shaded cells.",
@@ -919,16 +937,29 @@ test.describe("responsive app layout", () => {
         shape: "circle",
         created_at: "2026-05-29 14:00:00",
       };
+      const neighboringMark = {
+        uid: `neighbor-${Date.now()}`,
+        display_name: "Neighbor Claim",
+        message: "Expands one tile farther.",
+        drawing: null,
+        x_percent: "1536.00",
+        y_percent: "512.00",
+        color: "#f0b35a",
+        shape: "square",
+        created_at: "2026-05-29 14:01:00",
+      };
 
       window.dispatchEvent(new CustomEvent("test:syncMarks", {
         detail: {
           ok: true,
-          count: 1,
-          marks: [borderMark],
-          mark_uids: [borderMark.uid],
+          count: 2,
+          marks: [centerMark, neighboringMark],
+          mark_uids: [centerMark.uid, neighboringMark.uid],
         },
       }));
     });
+
+    await fitWholeWorld(page);
 
     const tileClasses = await page.evaluate(() => {
       const classes = {};
@@ -944,7 +975,8 @@ test.describe("responsive app layout", () => {
     expect(tileClasses["1,0"]).toContain("is-committed");
     expect(tileClasses["0,1"]).toContain("is-committed");
     expect(tileClasses["1,1"]).toContain("is-committed");
-    expect(tileClasses["2,0"]).toContain("is-unavailable");
+    expect(tileClasses["2,0"]).toContain("is-committed");
+    expect(tileClasses["3,0"]).toContain("is-unavailable");
   });
 
   test("shades bounded tile cells that are not directly adjacent", async ({ page }) => {
@@ -989,6 +1021,8 @@ test.describe("responsive app layout", () => {
       }));
     });
 
+    await fitWholeWorld(page);
+
     const tileState = await page.evaluate(() => ({
       committed: document.querySelectorAll(".canvas-tile.is-committed").length,
       unavailable: document.querySelectorAll(".canvas-tile.is-unavailable").length,
@@ -1029,15 +1063,17 @@ test.describe("responsive app layout", () => {
       }));
     });
 
+    await fitWholeWorld(page);
+
     const rightEdgeTile = await page.evaluate(() => {
       const tiles = Array.from(document.querySelectorAll(".canvas-tile"));
       const tileStates = tiles.map((tile) => ({
         tileX: -(Number.parseFloat(tile.style.getPropertyValue("--tile-bg-x")) || 0) / 1024,
+        tileY: -(Number.parseFloat(tile.style.getPropertyValue("--tile-bg-y")) || 0) / 1024,
         className: tile.className,
       }));
-      const farthestTileX = Math.max(...tileStates.map((tile) => tile.tileX));
 
-      return tileStates.find((tile) => tile.tileX === farthestTileX)?.className || "";
+      return tileStates.find((tile) => tile.tileX === 4 && tile.tileY === 0)?.className || "";
     });
 
     expect(rightEdgeTile).toContain("is-unavailable");
@@ -1082,6 +1118,8 @@ test.describe("responsive app layout", () => {
       }));
     });
 
+    await fitWholeWorld(page);
+
     const canvasState = await page.evaluate(() => ({
       oldMarkExists: Boolean(document.querySelector("[data-name='Old Mark']")),
       recentNames: Array.from(document.querySelectorAll("[data-recent-list] strong")).map((item) => item.textContent),
@@ -1097,7 +1135,7 @@ test.describe("responsive app layout", () => {
     expect(canvasState.oldMarkTileClass).toContain("is-committed");
   });
 
-  test("random placement samples committed canvas tiles without expanding before save", async ({ page }) => {
+  test("random placement samples explored canvas tiles without expanding before save", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
     await page.evaluate(() => {

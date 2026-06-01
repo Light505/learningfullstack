@@ -53,6 +53,7 @@ let drawingMode = "draw";
 let liveSyncReady = false;
 let activeTool = "place";
 let canvasView = { zoom: 1, panX: 0, panY: 0 };
+let leafletMap = null;
 let panStart = null;
 let keyboardPanActive = false;
 let suppressNextCanvasClick = false;
@@ -82,7 +83,14 @@ const clusterSteps = [
     { minZoom: 0.08, tileFraction: 1 / 2 },
     { minZoom: 0, tileFraction: 1 },
 ];
-const committedTiles = new Set(["0,0"]);
+const fullTileKeys = new Set();
+for (let tileX = minTileIndex; tileX <= maxTileIndex; tileX += 1) {
+    for (let tileY = minTileIndex; tileY <= maxTileIndex; tileY += 1) {
+        fullTileKeys.add(`${tileX},${tileY}`);
+    }
+}
+const exploredTiles = new Set(["0,0"]);
+const maxDetailedTileRenderCount = 400;
 
 function snapGridDivisionForZoom(zoom) {
     if (zoom >= 0.9) return 1;
@@ -538,68 +546,100 @@ function canvasViewsMatch(firstView, secondView) {
 }
 
 function updateWorldBounds() {
-    const previousBounds = { ...worldBounds };
-    const tiles = Array.from(visibleTileKeys()).map((key) => {
-        const [tileX, tileY] = key.split(",").map(Number);
-        return { tileX, tileY };
-    });
-
     worldBounds = {
-        minX: Math.min(...tiles.map((tile) => tile.tileX)) * tileSize,
-        maxX: (Math.max(...tiles.map((tile) => tile.tileX)) + 1) * tileSize,
-        minY: Math.min(...tiles.map((tile) => tile.tileY)) * tileSize,
-        maxY: (Math.max(...tiles.map((tile) => tile.tileY)) + 1) * tileSize,
+        minX: minTileIndex * tileSize,
+        maxX: (maxTileIndex + 1) * tileSize,
+        minY: minTileIndex * tileSize,
+        maxY: (maxTileIndex + 1) * tileSize,
     };
+}
 
-    const boundsChanged = previousBounds.minX !== worldBounds.minX
-        || previousBounds.maxX !== worldBounds.maxX
-        || previousBounds.minY !== worldBounds.minY
-        || previousBounds.maxY !== worldBounds.maxY;
-
-    if (boundsChanged) {
-        canvasView.panX += (worldBounds.minX - previousBounds.minX) * canvasView.zoom;
-        canvasView.panY += (worldBounds.minY - previousBounds.minY) * canvasView.zoom;
-        geometryDirty = true;
+function revealTileAndNeighbors(tileX, tileY) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dy = -1; dy <= 1; dy += 1) {
+            const nx = tileX + dx;
+            const ny = tileY + dy;
+            if (nx >= minTileIndex && nx <= maxTileIndex && ny >= minTileIndex && ny <= maxTileIndex) {
+                exploredTiles.add(`${nx},${ny}`);
+            }
+        }
     }
 }
 
+function revealExploredNeighbors(tileX, tileY) {
+    revealTileAndNeighbors(tileX, tileY);
+}
+
 function commitTile(tileX, tileY) {
-    committedTiles.add(`${tileX},${tileY}`);
+    exploredTiles.add(`${tileX},${tileY}`);
 }
 
 function commitTileBandForCoordinate(x, y) {
     const tileX = Math.floor(x / tileSize);
     const tileY = Math.floor(y / tileSize);
 
-    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-            commitTile(tileX + offsetX, tileY + offsetY);
-        }
-    }
+    revealTileAndNeighbors(tileX, tileY);
 }
 
 function visibleTileKeys() {
+    if (!canvas) {
+        return new Set();
+    }
+
+    const bounds = visibleWorldBounds();
+    const minTileX = Math.floor(bounds.minX / tileSize);
+    const maxTileX = Math.floor(bounds.maxX / tileSize);
+    const minTileY = Math.floor(bounds.minY / tileSize);
+    const maxTileY = Math.floor(bounds.maxY / tileSize);
+    const visibleTileCount = (maxTileX - minTileX + 1) * (maxTileY - minTileY + 1);
+
     const tiles = new Set();
+    if (visibleTileCount > maxDetailedTileRenderCount) {
+        exploredTiles.forEach((key) => {
+            const [tileX, tileY] = key.split(",").map(Number);
+            for (let dx = -1; dx <= 1; dx += 1) {
+                for (let dy = -1; dy <= 1; dy += 1) {
+                    const nx = tileX + dx;
+                    const ny = tileY + dy;
+                    const neighborKey = `${nx},${ny}`;
+                    if (nx >= minTileX && nx <= maxTileX
+                        && ny >= minTileY && ny <= maxTileY
+                        && fullTileKeys.has(neighborKey)) {
+                        tiles.add(neighborKey);
+                    }
+                }
+            }
+        });
 
-    committedTiles.forEach((key) => {
-        const [tileX, tileY] = key.split(",").map(Number);
+        return tiles;
+    }
 
-        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-            for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-                tiles.add(`${tileX + offsetX},${tileY + offsetY}`);
+    for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+        for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+            const key = `${tileX},${tileY}`;
+            if (fullTileKeys.has(key)) {
+                tiles.add(key);
             }
         }
-    });
+    }
 
     return tiles;
+}
+
+function isExploredTile(tileX, tileY) {
+    return exploredTiles.has(`${tileX},${tileY}`);
 }
 
 function tileKeyForCoordinate(x, y) {
     return `${Math.floor(x / tileSize)},${Math.floor(y / tileSize)}`;
 }
 
-function isCommittedCoordinate(x, y) {
-    return committedTiles.has(tileKeyForCoordinate(x, y));
+function isExploredCoordinate(x, y) {
+    return exploredTiles.has(tileKeyForCoordinate(x, y));
+}
+
+function isPlaceableCoordinate(x, y) {
+    return isExploredCoordinate(x, y);
 }
 
 function isTileInsideCoordinateBounds(tileX, tileY) {
@@ -615,11 +655,11 @@ function isTileInsideCoordinateBounds(tileX, tileY) {
 }
 
 function isPlaceableTile(tileX, tileY) {
-    return committedTiles.has(`${tileX},${tileY}`) && isTileInsideCoordinateBounds(tileX, tileY);
+    return exploredTiles.has(`${tileX},${tileY}`) && isTileInsideCoordinateBounds(tileX, tileY);
 }
 
-function randomCoordinateInCommittedTiles() {
-    const tileKeys = Array.from(committedTiles).filter((key) => {
+function randomCoordinateInExploredTiles() {
+    const tileKeys = Array.from(exploredTiles).filter((key) => {
         const [tileX, tileY] = key.split(",").map(Number);
 
         return isTileInsideCoordinateBounds(tileX, tileY);
@@ -639,7 +679,7 @@ function renderCanvasTiles() {
 
     const visibleTiles = Array.from(visibleTileKeys()).sort();
     const tileSignature = [
-        Array.from(committedTiles).sort().join("|"),
+        Array.from(exploredTiles).sort().join("|"),
         visibleTiles.join("|"),
         worldBounds.minX,
         worldBounds.minY,
@@ -654,10 +694,11 @@ function renderCanvasTiles() {
 
     visibleTiles.forEach((key) => {
         const [tileX, tileY] = key.split(",").map(Number);
+        const explored = isExploredTile(tileX, tileY);
         const tile = document.createElement("span");
-        tile.className = isPlaceableTile(tileX, tileY)
+        tile.className = explored
             ? "canvas-tile is-committed"
-            : "canvas-tile is-unavailable";
+            : "canvas-tile is-unavailable is-fog";
         tile.style.setProperty("--tile-left", `${tileX * tileSize - worldBounds.minX}px`);
         tile.style.setProperty("--tile-top", `${tileY * tileSize - worldBounds.minY}px`);
         tile.style.setProperty("--tile-width", `${tileSize}px`);
@@ -886,6 +927,11 @@ function applyCanvasView(options = {}) {
     canvas.style.setProperty("--canvas-pan-y", `${canvasView.panY}px`);
     canvas.style.setProperty("--canvas-zoom", String(canvasView.zoom));
     canvas.classList.toggle("is-map-view", canvasView.zoom < mapModeZoom);
+    canvas.dataset.renderMode = canvasView.zoom < mapModeZoom
+        ? "map"
+        : visibleTileKeys().size > maxTileOverviewStopCount
+            ? "overview"
+            : "detail";
     renderMapClusters();
     positionMarkPopout();
     updateZoomControls();
@@ -968,6 +1014,23 @@ function nextZoomOutStop(targetZoom) {
     return clampedTarget;
 }
 
+function nextZoomInStop(targetZoom) {
+    const clampedTarget = clampZoom(targetZoom);
+    const nextStop = [...overviewZoomStops(), 1]
+        .sort((a, b) => a - b)
+        .find((zoom) => zoom > canvasView.zoom + 0.001);
+
+    if (canvasView.zoom < 0.999 && nextStop) {
+        return nextStop;
+    }
+
+    if (nextStop && nextStop < clampedTarget - 0.001) {
+        return nextStop;
+    }
+
+    return clampedTarget;
+}
+
 function setExportVisible(isVisible) {
     if (exportTools) {
         exportTools.hidden = !isVisible;
@@ -1020,8 +1083,8 @@ function expandWorldForMarks(extraMark = null) {
 }
 
 function rebuildWorldForCurrentMarks() {
-    committedTiles.clear();
-    commitTile(0, 0);
+    exploredTiles.clear();
+    exploredTiles.add("0,0");
     commitTilesForMarks(marks);
     updateWorldBounds();
     geometryDirty = true;
@@ -1246,7 +1309,7 @@ function zoomCanvasTo(targetZoom, origin = null, options = {}) {
 
 function zoomCanvas(delta, origin = null, options = {}) {
     const targetZoom = Number((canvasView.zoom + delta).toFixed(2));
-    zoomCanvasTo(delta < 0 ? nextZoomOutStop(targetZoom) : targetZoom, origin, options);
+    zoomCanvasTo(delta < 0 ? nextZoomOutStop(targetZoom) : nextZoomInStop(targetZoom), origin, options);
 }
 
 function zoomCanvasByButton(direction) {
@@ -1430,7 +1493,7 @@ function placementStateForPoint(x, y) {
         return "invalid";
     }
 
-    if (!isCommittedCoordinate(x, y)) {
+    if (!isPlaceableCoordinate(x, y)) {
         return "invalid";
     }
 
@@ -1472,7 +1535,7 @@ function setPlacement(x, y) {
     const selectedX = x;
     const selectedY = y;
 
-    if (!isCommittedCoordinate(selectedX, selectedY)) {
+    if (!isPlaceableCoordinate(selectedX, selectedY)) {
         return rejectPlacement("Choose a spot inside the available canvas.");
     }
 
@@ -1671,6 +1734,9 @@ function addOrUpdateMark(mark, select = false, options = {}) {
     canvasWorld.appendChild(element);
     marks.push(element);
     cacheMarkPosition(element);
+    const tileX = Math.floor(Number.parseFloat(mark.x ?? "0") / tileSize);
+    const tileY = Math.floor(Number.parseFloat(mark.y ?? "0") / tileSize);
+    revealExploredNeighbors(tileX, tileY);
     if (!options.deferLayout) {
         expandWorldForMarks();
     }
@@ -2411,7 +2477,7 @@ if (canvas && xField && yField && placementNote) {
             setActiveTool(randomButton);
 
             for (let attempt = 0; attempt < 80; attempt += 1) {
-                const { x, y } = randomCoordinateInCommittedTiles();
+                const { x, y } = randomCoordinateInExploredTiles();
 
                 if (!tooCloseToExistingMarks(x, y)) {
                     setPlacement(x, y);

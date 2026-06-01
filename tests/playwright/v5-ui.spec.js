@@ -39,7 +39,15 @@ test.describe("Version 5 mark UI", () => {
     });
 
     if (visibleMark) {
-      await page.mouse.click(visibleMark.screenX, visibleMark.screenY);
+      await page.evaluate(({ screenX, screenY }) => {
+        const canvasElement = document.querySelector("[data-mark-canvas]");
+        canvasElement.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          clientX: screenX,
+          clientY: screenY,
+        }));
+      }, visibleMark);
       await expect(placementNote).toContainText(/too close/i);
       await expect(marker).toBeHidden();
     }
@@ -52,9 +60,9 @@ test.describe("Version 5 mark UI", () => {
     await expect(marker).toBeVisible();
     await expect(submit).toBeEnabled();
 
-    const markerBeforeRandom = await marker.evaluate((element) => ({
-      x: element.style.getPropertyValue("--placement-x"),
-      y: element.style.getPropertyValue("--placement-y"),
+    const markerBeforeRandom = await page.evaluate(() => ({
+      x: document.querySelector("[data-x-field]").value,
+      y: document.querySelector("[data-y-field]").value,
     }));
 
     await page.evaluate(() => {
@@ -63,9 +71,9 @@ test.describe("Version 5 mark UI", () => {
     });
     await randomButton.click();
     await expect(marker).toBeVisible();
-    const markerAfterRandom = await marker.evaluate((element) => ({
-      x: element.style.getPropertyValue("--placement-x"),
-      y: element.style.getPropertyValue("--placement-y"),
+    const markerAfterRandom = await page.evaluate(() => ({
+      x: document.querySelector("[data-x-field]").value,
+      y: document.querySelector("[data-y-field]").value,
     }));
     expect(markerAfterRandom).not.toEqual(markerBeforeRandom);
 
@@ -104,10 +112,12 @@ test.describe("Version 5 mark UI", () => {
     expect(savedMark.color).toBe("#f0b35a");
 
     await Promise.all([
-      page.waitForLoadState("domcontentloaded"),
+      page.waitForResponse((response) => response.url().includes("/api/marks.php") && response.request().method() === "POST"),
       undoButton.click(),
     ]);
 
     await expect(entryCount).toHaveText(String(startingCount));
+    await expect(page.locator("[data-form-status]")).toHaveText("Latest mark removed.");
+    await expect(undoButton).toBeDisabled();
   });
 });

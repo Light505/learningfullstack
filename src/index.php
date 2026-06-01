@@ -58,7 +58,9 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>I was here.</title>
+    <link rel="stylesheet" href="/assets/lib/leaflet/leaflet.css">
     <link rel="stylesheet" href="/assets/css/home.css">
+    <script src="/assets/lib/leaflet/leaflet.js" defer></script>
     <script src="/assets/js/canvas-prototype.js" defer></script>
 </head>
 <body>
