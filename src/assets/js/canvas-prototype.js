@@ -63,11 +63,16 @@ let undoMarkAvailable = Boolean(undoButton?.dataset.lastMarkUid);
 let lastWheelZoomAt = 0;
 let lastWheelZoomDirection = 0;
 const tileSize = 1024;
+const minTileIndex = -100;
+const maxTileIndex = 100;
+const worldMinCoordinate = minTileIndex * tileSize;
+const worldMaxCoordinate = (maxTileIndex + 1) * tileSize;
 const eraserRadius = 4.5;
 const mapModeZoom = 0.32;
 const maxCanvasZoom = 2.4;
 const zoomStep = 0.2;
 const wheelZoomCooldown = 260;
+const zoomSnapTolerance = 0.001;
 const tileViewStopCounts = [3, 7, 13];
 const maxTileOverviewStopCount = 25;
 const worldViewStopFractions = [0.25, 0.5, 1];
@@ -78,6 +83,73 @@ const clusterSteps = [
     { minZoom: 0, tileFraction: 1 },
 ];
 const committedTiles = new Set(["0,0"]);
+
+function snapGridDivisionForZoom(zoom) {
+    if (zoom >= 0.9) return 1;
+    if (zoom >= 0.4) return 3;
+    if (zoom >= 0.2) return 5;
+    if (zoom >= 0.1) return 7;
+    return 0;
+}
+
+function gridSnappedCanvasView(zoom, view = canvasView) {
+    const gridDivision = snapGridDivisionForZoom(zoom);
+    if (gridDivision === 1) {
+        return tileSnappedCanvasView(zoom, view);
+    }
+    if (gridDivision === 0) {
+        return { ...view, zoom };
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const config = getInputConfig();
+    const center = viewportCenterCoordinate(view);
+    const tile = nearestVisibleTileToCoordinate(center.x, center.y);
+    const tileCenter = tileCenterCoordinate(tile.tileX, tile.tileY);
+
+    const tileFraction = 1 / gridDivision;
+    const viewportWidthWorld = rect.width / zoom;
+    const viewportHeightWorld = rect.height / zoom;
+    const halfViewportWidthWorld = viewportWidthWorld / 2;
+    const halfViewportHeightWorld = viewportHeightWorld / 2;
+
+    const leftEdgeWorld = center.x - halfViewportWidthWorld;
+    const topEdgeWorld = center.y - halfViewportHeightWorld;
+    const rightEdgeWorld = center.x + halfViewportWidthWorld;
+    const bottomEdgeWorld = center.y + halfViewportHeightWorld;
+
+    const snapToleranceWorld = config.snapTolerance / zoom;
+    const tileSizeWorld = tileSize;
+
+    const snapX = (worldX) => {
+        const normalizedX = ((worldX % tileSizeWorld) + tileSizeWorld) % tileSizeWorld;
+        const gridLineX = Math.round(normalizedX / (tileSizeWorld * tileFraction)) * (tileSizeWorld * tileFraction);
+        const tileStartX = worldX - normalizedX;
+        return tileStartX + gridLineX;
+    };
+
+    const snapY = (worldY) => {
+        const normalizedY = ((worldY % tileSizeWorld) + tileSizeWorld) % tileSizeWorld;
+        const gridLineY = Math.round(normalizedY / (tileSizeWorld * tileFraction)) * (tileSizeWorld * tileFraction);
+        const tileStartY = worldY - normalizedY;
+        return tileStartY + gridLineY;
+    };
+
+    const snappedLeft = snapX(leftEdgeWorld);
+    const snappedTop = snapY(topEdgeWorld);
+    const snappedCenterX = snappedLeft + halfViewportWidthWorld;
+    const snappedCenterY = snappedTop + halfViewportHeightWorld;
+
+    return centeredCanvasViewForCoordinate(snappedCenterX, snappedCenterY, zoom);
+}
+
+function tileSnappedCanvasView(zoom, view = canvasView) {
+    const center = viewportCenterCoordinate(view);
+    const tile = nearestVisibleTileToCoordinate(center.x, center.y);
+    const tileCenter = tileCenterCoordinate(tile.tileX, tile.tileY);
+
+    return centeredCanvasViewForCoordinate(tileCenter.x, tileCenter.y, zoom);
+}
 let worldBounds = { minX: 0, maxX: tileSize, minY: 0, maxY: tileSize };
 let viewAnimation = null;
 let geometryDirty = true;
@@ -328,6 +400,108 @@ function rubberbandPan(value, min, max) {
     }
 
     return value;
+}
+
+function tileSnapCounts() {
+    const counts = [1];
+    for (let count = 3; count <= maxTileOverviewStopCount; count += 2) {
+        counts.push(count);
+    }
+    return counts;
+}
+
+function zoomSnapStopItems() {
+    const fitZoom = fitWorldZoom();
+    const singleTileZoom = tileViewZoomForCount(1);
+    const quarterWorldZoom = fitZoom / 0.25;
+    const maxTileOverviewZoom = tileViewZoomForCount(maxTileOverviewStopCount);
+    const overviewBoundaryZoom = Math.max(quarterWorldZoom, maxTileOverviewZoom);
+    const tileStops = tileSnapCounts()
+        .filter((tileCount) => tileCount !== 1)
+        .map((tileCount) => ({
+            type: "tile",
+            tileCount,
+            zoom: tileViewZoomForCount(tileCount),
+        }))
+        .filter((stop) => stop.zoom > overviewBoundaryZoom + zoomSnapTolerance);
+    const worldStops = worldViewStopFractions
+        .filter((fraction) => fraction > 0.25)
+        .map((fraction) => ({
+            type: fraction === 1 ? "world" : "world-fraction",
+            fraction,
+            zoom: fitZoom / fraction,
+        }));
+    const overviewStops = overviewBoundaryZoom < singleTileZoom - zoomSnapTolerance
+        ? [{ type: "overview", zoom: overviewBoundaryZoom }]
+        : [];
+
+    return [
+        { type: "detail", zoom: 1 },
+        { type: "tile", tileCount: 1, zoom: singleTileZoom },
+        ...tileStops,
+        ...overviewStops,
+        ...worldStops,
+    ]
+        .map((stop) => ({ ...stop, zoom: clampZoom(stop.zoom) }))
+        .filter((stop) => stop.zoom >= fitZoom && stop.zoom <= maxCanvasZoom)
+        .filter((stop, index, stops) => stops.findIndex((item) => Math.abs(item.zoom - stop.zoom) < zoomSnapTolerance) === index)
+        .sort((a, b) => b.zoom - a.zoom);
+}
+
+function zoomSnapStops() {
+    return zoomSnapStopItems().map((stop) => stop.zoom);
+}
+
+function zoomSnapStopForZoom(zoom) {
+    return zoomSnapStopItems().find((stop) => Math.abs(stop.zoom - zoom) < zoomSnapTolerance);
+}
+
+function viewportCenterCoordinate(view = canvasView) {
+    if (!canvas) {
+        return { x: 0, y: 0 };
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const zoom = Math.max(view.zoom, 0.001);
+
+    return {
+        x: worldBounds.minX + (((rect.width / 2) - view.panX) / zoom),
+        y: worldBounds.minY + (((rect.height / 2) - view.panY) / zoom),
+    };
+}
+
+function nearestTileIndexForCoordinate(coordinate) {
+    return Math.round((coordinate - (tileSize / 2)) / tileSize);
+}
+
+function tileCenterCoordinate(tileX, tileY) {
+    return {
+        x: (tileX * tileSize) + (tileSize / 2),
+        y: (tileY * tileSize) + (tileSize / 2),
+    };
+}
+
+function nearestVisibleTileToCoordinate(x, y) {
+    return {
+        tileX: Math.max(minTileIndex, Math.min(maxTileIndex, nearestTileIndexForCoordinate(x))),
+        tileY: Math.max(minTileIndex, Math.min(maxTileIndex, nearestTileIndexForCoordinate(y))),
+    };
+}
+
+function centeredCanvasViewForCoordinate(x, y, zoom) {
+    const rect = canvas.getBoundingClientRect();
+
+    return {
+        zoom,
+        panX: (rect.width / 2) - ((x - worldBounds.minX) * zoom),
+        panY: (rect.height / 2) - ((y - worldBounds.minY) * zoom),
+    };
+}
+
+function canvasViewsMatch(firstView, secondView) {
+    return Math.abs(firstView.zoom - secondView.zoom) < zoomSnapTolerance
+        && Math.abs(firstView.panX - secondView.panX) < 0.5
+        && Math.abs(firstView.panY - secondView.panY) < 0.5;
 }
 
 function updateWorldBounds() {
@@ -911,13 +1085,29 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
 }
 
 function settleCanvasView() {
-    const nextView = clampedCanvasView(canvasView);
+    const gridDivision = snapGridDivisionForZoom(canvasView.zoom);
+    let nextView;
 
-    if (nextView.panX === canvasView.panX && nextView.panY === canvasView.panY) {
+    if (gridDivision >= 3) {
+        nextView = gridSnappedCanvasView(canvasView.zoom, canvasView);
+    } else {
+        const snapStop = zoomSnapStopForZoom(canvasView.zoom);
+        if (snapStop?.type === "tile") {
+            nextView = tileSnappedCanvasView(snapStop.zoom);
+        } else {
+            nextView = clampedCanvasView(canvasView);
+        }
+    }
+
+    if (nextView.panX === canvasView.panX && nextView.panY === canvasView.panY && nextView.zoom === canvasView.zoom) {
         return;
     }
 
-    animateCanvasViewTo(nextView, 360, { clamp: false });
+    const useElastic = gridDivision >= 3;
+    animateCanvasViewTo(nextView, useElastic ? 400 : 360, {
+        clamp: false,
+        easing: useElastic ? easeOutElastic : easeOutCubic
+    });
 }
 
 function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
