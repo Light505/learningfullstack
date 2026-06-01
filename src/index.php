@@ -204,6 +204,7 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
 
                         <div class="canvas-world" data-canvas-world>
                             <div class="canvas-tiles" data-canvas-tiles aria-hidden="true"></div>
+                            <canvas class="canvas-fog" data-fog-canvas aria-hidden="true"></canvas>
                             <div class="map-clusters" data-map-clusters aria-label="Clustered marks"></div>
 
                             <?php foreach ($marks as $index => $mark): ?>

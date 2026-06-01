@@ -10,6 +10,7 @@ const canvasHint = document.querySelector("[data-canvas-hint]");
 const hideCanvasHint = document.querySelector("[data-hide-canvas-hint]");
 const canvasWorld = document.querySelector("[data-canvas-world]");
 const canvasTiles = document.querySelector("[data-canvas-tiles]");
+const fogCanvas = document.querySelector("[data-fog-canvas]");
 const mapClusters = document.querySelector("[data-map-clusters]");
 const form = document.querySelector("[data-mark-form]");
 const xField = document.querySelector("[data-x-field]");
@@ -162,6 +163,7 @@ let worldBounds = { minX: 0, maxX: tileSize, minY: 0, maxY: tileSize };
 let viewAnimation = null;
 let geometryDirty = true;
 let renderedTileSignature = "";
+let renderedFogSignature = "";
 let renderedClusterSignature = "";
 let renderedClusterMode = false;
 const markPositions = new Map();
@@ -712,6 +714,93 @@ function renderCanvasTiles() {
     canvasTiles.appendChild(fragment);
 }
 
+function renderFogCanvas(renderMode) {
+    if (!fogCanvas) {
+        return;
+    }
+
+    if (renderMode === "detail") {
+        renderedFogSignature = "detail";
+        return;
+    }
+
+    const worldWidth = worldBounds.maxX - worldBounds.minX;
+    const worldHeight = worldBounds.maxY - worldBounds.minY;
+    const exploredSignature = Array.from(exploredTiles).sort().join("|");
+    const signature = [
+        renderMode,
+        worldBounds.minX,
+        worldBounds.minY,
+        worldWidth,
+        worldHeight,
+        exploredSignature,
+    ].join("::");
+    if (signature === renderedFogSignature) {
+        return;
+    }
+
+    renderedFogSignature = signature;
+
+    const maxFogPixels = renderMode === "map" ? 4096 : 3072;
+    const fogScale = Math.min(1, maxFogPixels / Math.max(worldWidth, worldHeight));
+    const fogWidth = Math.max(1, Math.ceil(worldWidth * fogScale));
+    const fogHeight = Math.max(1, Math.ceil(worldHeight * fogScale));
+
+    if (fogCanvas.width !== fogWidth) {
+        fogCanvas.width = fogWidth;
+    }
+    if (fogCanvas.height !== fogHeight) {
+        fogCanvas.height = fogHeight;
+    }
+
+    const context = fogCanvas.getContext("2d");
+    context.clearRect(0, 0, fogWidth, fogHeight);
+    context.fillStyle = renderMode === "map"
+        ? "rgba(21, 29, 35, 0.82)"
+        : "rgba(29, 35, 38, 0.7)";
+    context.fillRect(0, 0, fogWidth, fogHeight);
+
+    const fogGradient = context.createLinearGradient(0, 0, fogWidth, fogHeight);
+    fogGradient.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+    fogGradient.addColorStop(0.5, "rgba(40, 52, 58, 0.18)");
+    fogGradient.addColorStop(1, "rgba(0, 0, 0, 0.22)");
+    context.fillStyle = fogGradient;
+    context.fillRect(0, 0, fogWidth, fogHeight);
+
+    context.save();
+    context.globalCompositeOperation = "destination-out";
+    Array.from(exploredTiles).forEach((key) => {
+        const [tileX, tileY] = key.split(",").map(Number);
+        const x = ((tileX * tileSize) - worldBounds.minX) * fogScale;
+        const y = ((tileY * tileSize) - worldBounds.minY) * fogScale;
+        const size = tileSize * fogScale;
+
+        context.fillStyle = "rgba(0, 0, 0, 0.32)";
+        context.fillRect(x - (size * 0.18), y - (size * 0.18), size * 1.36, size * 1.36);
+        context.fillStyle = "rgba(0, 0, 0, 0.96)";
+        context.fillRect(x, y, size, size);
+    });
+    context.restore();
+
+    context.globalCompositeOperation = "source-over";
+    context.fillStyle = renderMode === "map"
+        ? "rgba(232, 243, 244, 0.08)"
+        : "rgba(232, 243, 244, 0.05)";
+    const step = renderMode === "map" ? 24 : 18;
+    for (let x = 0; x < fogWidth; x += step) {
+        context.fillRect(x, 0, 1, fogHeight);
+    }
+    for (let y = 0; y < fogHeight; y += step) {
+        context.fillRect(0, y, fogWidth, 1);
+    }
+
+    context.fillStyle = "rgba(6, 12, 16, 0.12)";
+    for (let y = 0; y < fogHeight; y += 7) {
+        const offset = (y * 13) % 31;
+        context.fillRect(offset, y, fogWidth - offset, 1);
+    }
+}
+
 function clusterCellSizeForZoom(zoom) {
     const step = clusterSteps.find((item) => zoom >= item.minZoom) || clusterSteps[clusterSteps.length - 1];
     return tileSize * step.tileFraction;
@@ -927,11 +1016,13 @@ function applyCanvasView(options = {}) {
     canvas.style.setProperty("--canvas-pan-y", `${canvasView.panY}px`);
     canvas.style.setProperty("--canvas-zoom", String(canvasView.zoom));
     canvas.classList.toggle("is-map-view", canvasView.zoom < mapModeZoom);
-    canvas.dataset.renderMode = canvasView.zoom < mapModeZoom
+    const renderMode = canvasView.zoom < mapModeZoom
         ? "map"
         : visibleTileKeys().size > maxTileOverviewStopCount
             ? "overview"
             : "detail";
+    canvas.dataset.renderMode = renderMode;
+    renderFogCanvas(renderMode);
     renderMapClusters();
     positionMarkPopout();
     updateZoomControls();

@@ -489,6 +489,74 @@ test.describe("responsive app layout", () => {
     expect(renderedTileCount).toBeLessThan(80);
   });
 
+  test("renders fog as a bounded overlay in whole-map view", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const farMark = {
+        uid: `fog-map-${Date.now()}`,
+        display_name: "Fog Map",
+        message: "Expands map.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#9fc5a8",
+        shape: "circle",
+        created_at: "just now",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: 1,
+          marks: [farMark],
+          recent_marks: [farMark],
+          mark_uids: [farMark.uid],
+        },
+      }));
+    });
+
+    await fitWholeWorld(page);
+    await expect.poll(async () => page.locator("[data-fog-canvas]").evaluate((element) => {
+      return Number.parseFloat(getComputedStyle(element).opacity);
+    })).toBeGreaterThan(0.8);
+
+    const fogState = await page.evaluate(() => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const fog = document.querySelector("[data-fog-canvas]");
+      const context = fog.getContext("2d");
+      const world = document.querySelector("[data-canvas-world]");
+      const style = getComputedStyle(world);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const minX = -102400;
+      const minY = -102400;
+      const scaleX = fog.width / worldWidth;
+      const scaleY = fog.height / worldHeight;
+      const alphaAt = (x, y) => {
+        const pixelX = Math.max(0, Math.min(fog.width - 1, Math.round((x - minX) * scaleX)));
+        const pixelY = Math.max(0, Math.min(fog.height - 1, Math.round((y - minY) * scaleY)));
+
+        return context.getImageData(pixelX, pixelY, 1, 1).data[3];
+      };
+
+      return {
+        renderMode: canvas.dataset.renderMode,
+        fogWidth: fog.width,
+        fogHeight: fog.height,
+        fogOpacity: Number.parseFloat(getComputedStyle(fog).opacity),
+        exploredAlpha: alphaAt(512, 512),
+        unexploredAlpha: alphaAt(-90000, -90000),
+      };
+    });
+
+    expect(fogState.renderMode).toBe("map");
+    expect(fogState.fogWidth).toBeLessThanOrEqual(4096);
+    expect(fogState.fogHeight).toBeLessThanOrEqual(4096);
+    expect(fogState.fogOpacity).toBeGreaterThan(0.8);
+    expect(fogState.unexploredAlpha).toBeGreaterThan(fogState.exploredAlpha + 80);
+  });
+
   test("toggles fit world back to the previous camera view", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
