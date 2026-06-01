@@ -2535,6 +2535,12 @@ if (canvas && xField && yField && placementNote) {
             return;
         }
 
+        if (keyboardPanActive && event.key.startsWith("Arrow")) {
+            event.preventDefault();
+            handleArrowPan(event.key);
+            return;
+        }
+
         if (event.key !== " " || isTextInputTarget(event.target)) {
             return;
         }
@@ -2548,17 +2554,34 @@ if (canvas && xField && yField && placementNote) {
             return;
         }
 
-        keyboardPanActive = false;
-        updatePanIntent();
-    });
-    window.addEventListener("blur", () => {
-        keyboardPanActive = false;
-        panStart = null;
-        canvas.classList.remove("is-panning");
-        settleCanvasView();
+keyboardPanActive = false;
         updatePanIntent();
     });
     resetCanvasView();
+
+    function handleArrowPan(key) {
+        const config = getInputConfig();
+        const speed = config.arrowPanSpeed;
+        let dx = 0;
+        let dy = 0;
+
+        switch (key) {
+            case "ArrowUp": dy = speed; break;
+            case "ArrowDown": dy = -speed; break;
+            case "ArrowLeft": dx = speed; break;
+            case "ArrowRight": dx = -speed; break;
+            default: return;
+        }
+
+        cancelCanvasViewAnimation();
+        cancelPanMomentum();
+
+        const { minPanX, maxPanX, minPanY, maxPanY } = canvasPanBounds();
+        canvasView.panX = rubberbandPan(canvasView.panX + dx, minPanX, maxPanX);
+        canvasView.panY = rubberbandPan(canvasView.panY + dy, minPanY, maxPanY);
+        applyCanvasView({ clamp: false });
+        leaveFitWorldMode();
+    }
 }
 
 if (form && formStatus) {
