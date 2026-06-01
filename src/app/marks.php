@@ -5,14 +5,73 @@ function mark_limits(): array
     return [
         'max_display_name' => 80,
         'max_message' => 280,
-        'max_drawing_bytes' => null,
-        'max_drawing_strokes' => null,
-        'max_drawing_points' => null,
+        'max_drawing_bytes' => 128000,
+        'max_drawing_strokes' => 128,
+        'max_drawing_points' => 8192,
         'allowed_shapes' => ['circle', 'square', 'diamond'],
         'min_distance_percent' => 46.08,
         'min_coordinate_percent' => -102400,
         'max_coordinate_percent' => 103424,
     ];
+}
+
+function mark_tile_size(): int
+{
+    return 1024;
+}
+
+function mark_tile_index_for_coordinate(float $coordinate): int
+{
+    return (int) floor($coordinate / mark_tile_size());
+}
+
+function mark_tile_bounds(array $limits): array
+{
+    return [
+        'min' => mark_tile_index_for_coordinate((float) $limits['min_coordinate_percent']),
+        'max' => mark_tile_index_for_coordinate((float) $limits['max_coordinate_percent']) - 1,
+    ];
+}
+
+function mark_tile_key(int $tile_x, int $tile_y): string
+{
+    return $tile_x . ',' . $tile_y;
+}
+
+function explored_tile_keys_for_marks(array $marks, array $limits): array
+{
+    $bounds = mark_tile_bounds($limits);
+    $explored = [mark_tile_key(0, 0) => true];
+
+    foreach ($marks as $mark) {
+        if (!isset($mark['x_percent'], $mark['y_percent']) || !is_numeric($mark['x_percent']) || !is_numeric($mark['y_percent'])) {
+            continue;
+        }
+
+        $tile_x = mark_tile_index_for_coordinate((float) $mark['x_percent']);
+        $tile_y = mark_tile_index_for_coordinate((float) $mark['y_percent']);
+
+        for ($dx = -1; $dx <= 1; $dx++) {
+            for ($dy = -1; $dy <= 1; $dy++) {
+                $neighbor_x = $tile_x + $dx;
+                $neighbor_y = $tile_y + $dy;
+                if ($neighbor_x >= $bounds['min'] && $neighbor_x <= $bounds['max'] && $neighbor_y >= $bounds['min'] && $neighbor_y <= $bounds['max']) {
+                    $explored[mark_tile_key($neighbor_x, $neighbor_y)] = true;
+                }
+            }
+        }
+    }
+
+    return $explored;
+}
+
+function mark_coordinate_is_explored(float $x_percent, float $y_percent, array $marks, array $limits): bool
+{
+    $tile_x = mark_tile_index_for_coordinate($x_percent);
+    $tile_y = mark_tile_index_for_coordinate($y_percent);
+    $explored = explored_tile_keys_for_marks($marks, $limits);
+
+    return isset($explored[mark_tile_key($tile_x, $tile_y)]);
 }
 
 function normalize_mark_input(array $input): array
@@ -78,11 +137,11 @@ function validate_mark(array $input, array $limits): ?string
         return $drawing_error;
     }
 
-    if (!is_numeric($x_percent) || (float) $x_percent < $limits['min_coordinate_percent'] || (float) $x_percent > $limits['max_coordinate_percent']) {
+    if (!is_numeric($x_percent) || (float) $x_percent < $limits['min_coordinate_percent'] || (float) $x_percent >= $limits['max_coordinate_percent']) {
         return 'Mark X position must be within the canvas bounds.';
     }
 
-    if (!is_numeric($y_percent) || (float) $y_percent < $limits['min_coordinate_percent'] || (float) $y_percent > $limits['max_coordinate_percent']) {
+    if (!is_numeric($y_percent) || (float) $y_percent < $limits['min_coordinate_percent'] || (float) $y_percent >= $limits['max_coordinate_percent']) {
         return 'Mark Y position must be within the canvas bounds.';
     }
 
@@ -159,6 +218,10 @@ function save_mark(PDO $pdo, array $input): array
     $error = validate_mark($mark, $limits);
     if ($error !== null) {
         throw new InvalidArgumentException($error);
+    }
+
+    if (!mark_coordinate_is_explored((float) $mark['x_percent'], (float) $mark['y_percent'], all_mark_coordinates($pdo), $limits)) {
+        throw new InvalidArgumentException('Choose a spot inside the available canvas.');
     }
 
     if (!mark_position_available(
@@ -267,6 +330,13 @@ function count_marks(PDO $pdo): int
     $stmt = $pdo->query('SELECT COUNT(*) FROM marks');
 
     return (int) $stmt->fetchColumn();
+}
+
+function all_mark_coordinates(PDO $pdo): array
+{
+    $stmt = $pdo->query('SELECT x_percent, y_percent FROM marks');
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 function all_marks(PDO $pdo, int $limit = 500): array
