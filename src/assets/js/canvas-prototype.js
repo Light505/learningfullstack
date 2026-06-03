@@ -78,12 +78,13 @@ const zoomSnapTolerance = 0.001;
 const tileViewStopCounts = [3, 7, 13];
 const maxTileOverviewStopCount = 25;
 const worldViewStopFractions = [0.25, 0.5, 1];
-const clusterSteps = [
-    { minZoom: 0.24, tileFraction: 1 / 8 },
-    { minZoom: 0.14, tileFraction: 1 / 4 },
-    { minZoom: 0.08, tileFraction: 1 / 2 },
-    { minZoom: 0, tileFraction: 1 },
+const clusterLevels = [
+    { key: "supercluster", label: "supercluster", radius: tileSize * 16, maxZoom: 0.14, padding: 120 },
+    { key: "galaxy", label: "galaxy cluster", radius: tileSize * 6, maxZoom: 0.28, padding: 108 },
+    { key: "system", label: "system cluster", radius: tileSize * 2, maxZoom: 0.62, padding: 96 },
+    { key: "neighbor", label: "neighbor cluster", radius: tileSize * 0.55, maxZoom: 1.15, padding: 84 },
 ];
+const clusterVisualCollisionPx = 72;
 const fullTileKeys = new Set();
 for (let tileX = minTileIndex; tileX <= maxTileIndex; tileX += 1) {
     for (let tileY = minTileIndex; tileY <= maxTileIndex; tileY += 1) {
@@ -92,6 +93,9 @@ for (let tileX = minTileIndex; tileX <= maxTileIndex; tileX += 1) {
 }
 const exploredTiles = new Set(["0,0"]);
 const maxDetailedTileRenderCount = 400;
+const tileRenderBuffer = 2;
+const tileUnloadBuffer = 3;
+const markRenderBuffer = 2;
 
 function snapGridDivisionForZoom(zoom) {
     if (zoom >= 0.9) return 1;
@@ -165,8 +169,16 @@ let geometryDirty = true;
 let renderedTileSignature = "";
 let renderedFogSignature = "";
 let renderedClusterSignature = "";
-let renderedClusterMode = false;
+let clusterCache = [];
+let clusterCacheSignature = "";
+let clusterDrilldown = null;
+let persistedClusters = [];
+let persistedClusterMemberships = [];
+let hasPersistedClusterPayload = false;
+let activeClusterExpansion = null;
 const markPositions = new Map();
+const renderedTileElements = new Map();
+const renderedMarkUids = new Set();
 let canvasHintTimer = null;
 const markPreview = document.querySelector(".mark-preview");
 let panMomentum = { velocityX: 0, velocityY: 0, lastX: 0, lastY: 0, lastTime: 0 };
@@ -588,11 +600,7 @@ function visibleTileKeys() {
         return new Set();
     }
 
-    const bounds = visibleWorldBounds();
-    const minTileX = Math.floor(bounds.minX / tileSize);
-    const maxTileX = Math.floor(bounds.maxX / tileSize);
-    const minTileY = Math.floor(bounds.minY / tileSize);
-    const maxTileY = Math.floor(bounds.maxY / tileSize);
+    const { minTileX, maxTileX, minTileY, maxTileY } = tileRangeForWorldBounds(visibleWorldBounds());
     const visibleTileCount = (maxTileX - minTileX + 1) * (maxTileY - minTileY + 1);
 
     const tiles = new Set();
@@ -626,6 +634,81 @@ function visibleTileKeys() {
     }
 
     return tiles;
+}
+
+function tileRangeForWorldBounds(bounds, buffer = 0) {
+    return {
+        minTileX: Math.max(minTileIndex, Math.floor(bounds.minX / tileSize) - buffer),
+        maxTileX: Math.min(maxTileIndex, Math.floor(bounds.maxX / tileSize) + buffer),
+        minTileY: Math.max(minTileIndex, Math.floor(bounds.minY / tileSize) - buffer),
+        maxTileY: Math.min(maxTileIndex, Math.floor(bounds.maxY / tileSize) + buffer),
+    };
+}
+
+function tileKeyInRange(key, range) {
+    const [tileX, tileY] = key.split(",").map(Number);
+
+    return tileX >= range.minTileX && tileX <= range.maxTileX
+        && tileY >= range.minTileY && tileY <= range.maxTileY;
+}
+
+function tileKeysForRange(range) {
+    const keys = [];
+
+    for (let tileY = range.minTileY; tileY <= range.maxTileY; tileY += 1) {
+        for (let tileX = range.minTileX; tileX <= range.maxTileX; tileX += 1) {
+            const key = `${tileX},${tileY}`;
+            if (fullTileKeys.has(key)) {
+                keys.push(key);
+            }
+        }
+    }
+
+    return keys;
+}
+
+function tileClassName(tileX, tileY) {
+    return isExploredTile(tileX, tileY)
+        ? "canvas-tile is-committed"
+        : "canvas-tile is-unavailable is-fog";
+}
+
+function positionTileElement(tile, tileX, tileY) {
+    tile.style.setProperty("--tile-left", `${tileX * tileSize - worldBounds.minX}px`);
+    tile.style.setProperty("--tile-top", `${tileY * tileSize - worldBounds.minY}px`);
+    tile.style.setProperty("--tile-width", `${tileSize}px`);
+    tile.style.setProperty("--tile-height", `${tileSize}px`);
+    tile.style.setProperty("--tile-bg-x", `${-(tileX * tileSize)}px`);
+    tile.style.setProperty("--tile-bg-y", `${-(tileY * tileSize)}px`);
+    tile.style.setProperty("--tile-shade", `${Math.abs((tileX * 17) + (tileY * 31)) % 7}`);
+}
+
+function updateTileElement(tile, key) {
+    const [tileX, tileY] = key.split(",").map(Number);
+    const nextClassName = tileClassName(tileX, tileY);
+
+    if (tile.className !== nextClassName) {
+        tile.className = nextClassName;
+    }
+
+    positionTileElement(tile, tileX, tileY);
+}
+
+function createTileElement(key) {
+    const tile = document.createElement("span");
+
+    tile.dataset.tileKey = key;
+    updateTileElement(tile, key);
+
+    return tile;
+}
+
+function clearRenderedTileCache() {
+    renderedTileElements.clear();
+    renderedTileSignature = "";
+    if (canvasTiles) {
+        canvasTiles.innerHTML = "";
+    }
 }
 
 function isExploredTile(tileX, tileY) {
@@ -679,10 +762,26 @@ function renderCanvasTiles() {
         return;
     }
 
-    const visibleTiles = Array.from(visibleTileKeys()).sort();
+    const visibleBounds = visibleWorldBounds();
+    const visibleRange = tileRangeForWorldBounds(visibleBounds);
+    const visibleTileCount = (visibleRange.maxTileX - visibleRange.minTileX + 1)
+        * (visibleRange.maxTileY - visibleRange.minTileY + 1);
+    const useViewportCulling = visibleTileCount <= maxDetailedTileRenderCount;
+    const renderRange = tileRangeForWorldBounds(visibleBounds, tileRenderBuffer);
+    const unloadRange = tileRangeForWorldBounds(visibleBounds, tileUnloadBuffer);
+    const renderTileKeys = useViewportCulling
+        ? tileKeysForRange(renderRange)
+        : Array.from(visibleTileKeys()).sort();
+    const renderTileSet = new Set(renderTileKeys);
+
+    if (canvas) {
+        canvas.dataset.tileCulling = useViewportCulling ? "viewport" : "overview";
+    }
+
     const tileSignature = [
+        useViewportCulling ? "viewport" : "overview",
         Array.from(exploredTiles).sort().join("|"),
-        visibleTiles.join("|"),
+        renderTileKeys.join("|"),
         worldBounds.minX,
         worldBounds.minY,
     ].join("::");
@@ -691,27 +790,31 @@ function renderCanvasTiles() {
     }
 
     renderedTileSignature = tileSignature;
-    canvasTiles.innerHTML = "";
     const fragment = document.createDocumentFragment();
 
-    visibleTiles.forEach((key) => {
-        const [tileX, tileY] = key.split(",").map(Number);
-        const explored = isExploredTile(tileX, tileY);
-        const tile = document.createElement("span");
-        tile.className = explored
-            ? "canvas-tile is-committed"
-            : "canvas-tile is-unavailable is-fog";
-        tile.style.setProperty("--tile-left", `${tileX * tileSize - worldBounds.minX}px`);
-        tile.style.setProperty("--tile-top", `${tileY * tileSize - worldBounds.minY}px`);
-        tile.style.setProperty("--tile-width", `${tileSize}px`);
-        tile.style.setProperty("--tile-height", `${tileSize}px`);
-        tile.style.setProperty("--tile-bg-x", `${-(tileX * tileSize)}px`);
-        tile.style.setProperty("--tile-bg-y", `${-(tileY * tileSize)}px`);
-        tile.style.setProperty("--tile-shade", `${Math.abs((tileX * 17) + (tileY * 31)) % 7}`);
+    renderedTileElements.forEach((tile, key) => {
+        if (useViewportCulling ? !tileKeyInRange(key, unloadRange) : !renderTileSet.has(key)) {
+            tile.remove();
+            renderedTileElements.delete(key);
+            return;
+        }
+
+        updateTileElement(tile, key);
+    });
+
+    renderTileKeys.forEach((key) => {
+        if (renderedTileElements.has(key)) {
+            return;
+        }
+
+        const tile = createTileElement(key);
+        renderedTileElements.set(key, tile);
         fragment.appendChild(tile);
     });
 
-    canvasTiles.appendChild(fragment);
+    if (fragment.childNodes.length > 0) {
+        canvasTiles.appendChild(fragment);
+    }
 }
 
 function renderFogCanvas(renderMode) {
@@ -801,9 +904,529 @@ function renderFogCanvas(renderMode) {
     }
 }
 
-function clusterCellSizeForZoom(zoom) {
-    const step = clusterSteps.find((item) => zoom >= item.minZoom) || clusterSteps[clusterSteps.length - 1];
-    return tileSize * step.tileFraction;
+function markToClusterItem(mark) {
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+    }
+
+    return { uid: mark.dataset.uid, mark, x, y };
+}
+
+function markClusterItems() {
+    return marks.map(markToClusterItem).filter(Boolean);
+}
+
+function markClusterItemsForDrilldown() {
+    const items = markClusterItems();
+    const visible = items.filter((item) => isMarkInsideViewport(item.x, item.y));
+
+    if (!clusterDrilldown) {
+        return visible;
+    }
+
+    const allowedUids = new Set(clusterDrilldown.uids);
+    return visible.filter((item) => allowedUids.has(item.uid));
+}
+
+function viewportWorldBounds(margin = 0) {
+    if (!canvas) {
+        return null;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const vpMinX = worldBounds.minX + ((margin - canvasView.panX) / canvasView.zoom);
+    const vpMaxX = worldBounds.minX + ((rect.width - margin - canvasView.panX) / canvasView.zoom);
+    const vpMinY = worldBounds.minY + ((margin - canvasView.panY) / canvasView.zoom);
+    const vpMaxY = worldBounds.minY + ((rect.height - margin - canvasView.panY) / canvasView.zoom);
+
+    return { minX: vpMinX, maxX: vpMaxX, minY: vpMinY, maxY: vpMaxY };
+}
+
+function isMarkInsideViewport(x, y) {
+    const margin = -tileSize;
+    const bounds = viewportWorldBounds(margin);
+    if (!bounds) {
+        return true;
+    }
+
+    return x >= bounds.minX && x <= bounds.maxX
+        && y >= bounds.minY && y <= bounds.maxY;
+}
+
+function averageLocation(items) {
+    let xTotal = 0;
+    let yTotal = 0;
+
+    items.forEach((item) => {
+        xTotal += item.x;
+        yTotal += item.y;
+    });
+
+    const total = items.length || 1;
+    return { x: xTotal / total, y: yTotal / total };
+}
+
+function boundsForMarks(markElements) {
+    return markElements.reduce((bounds, mark) => {
+        const x = Number.parseFloat(mark.dataset.x || "0");
+        const y = Number.parseFloat(mark.dataset.y || "0");
+        return {
+            minX: Math.min(bounds.minX, x),
+            maxX: Math.max(bounds.maxX, x),
+            minY: Math.min(bounds.minY, y),
+            maxY: Math.max(bounds.maxY, y),
+        };
+    }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+}
+
+function stableClusterId(members) {
+    const joined = members.map((member) => member.uid).sort().join("|");
+    let hash = 0;
+    for (let index = 0; index < joined.length; index += 1) {
+        hash = ((hash << 5) - hash + joined.charCodeAt(index)) | 0;
+    }
+
+    return `c${(hash >>> 0).toString(36)}-${members.length}`;
+}
+
+function makeClusterNode(members, level) {
+    const center = averageLocation(members);
+    return {
+        id: stableClusterId(members),
+        x: center.x,
+        y: center.y,
+        count: members.length,
+        marks: members.map((member) => member.mark),
+        level: level || null,
+    };
+}
+
+function clusterMarksForRadius(items, radius) {
+    const cell = radius || 1;
+    const grid = new Map();
+    const cellKey = (cx, cy) => `${cx},${cy}`;
+
+    items.forEach((item) => {
+        const cx = Math.floor(item.x / cell);
+        const cy = Math.floor(item.y / cell);
+        const key = cellKey(cx, cy);
+        const bucket = grid.get(key);
+        if (bucket) {
+            bucket.push(item);
+        } else {
+            grid.set(key, [item]);
+        }
+    });
+
+    const parent = new Map();
+    const find = (uid) => {
+        let p = parent.get(uid);
+        while (p !== uid) {
+            parent.set(uid, parent.get(p));
+            uid = p;
+            p = parent.get(uid);
+        }
+        return uid;
+    };
+    const union = (a, b) => {
+        const ra = find(a);
+        const rb = find(b);
+        if (ra !== rb) {
+            parent.set(ra, rb);
+        }
+    };
+
+    items.forEach((item) => {
+        parent.set(item.uid, item.uid);
+    });
+
+    const checked = new Set();
+    items.forEach((seed) => {
+        const scx = Math.floor(seed.x / cell);
+        const scy = Math.floor(seed.y / cell);
+
+        for (let dx = -1; dx <= 1; dx += 1) {
+            for (let dy = -1; dy <= 1; dy += 1) {
+                const bucket = grid.get(cellKey(scx + dx, scy + dy));
+                if (!bucket) {
+                    continue;
+                }
+                bucket.forEach((candidate) => {
+                    const pair = seed.uid < candidate.uid
+                        ? `${seed.uid}|${candidate.uid}`
+                        : `${candidate.uid}|${seed.uid}`;
+                    if (checked.has(pair)) {
+                        return;
+                    }
+                    checked.add(pair);
+                    if (Math.hypot(candidate.x - seed.x, candidate.y - seed.y) <= radius) {
+                        union(seed.uid, candidate.uid);
+                    }
+                });
+            }
+        }
+    });
+
+    const groups = new Map();
+    items.forEach((item) => {
+        const root = find(item.uid);
+        const group = groups.get(root);
+        if (group) {
+            group.push(item);
+        } else {
+            groups.set(root, [item]);
+        }
+    });
+
+    return [...groups.values()].map((members) => makeClusterNode(members));
+}
+
+function clusterLevelIndex() {
+    if (clusterDrilldown) {
+        return clusterDrilldown.levelIndex;
+    }
+
+    const index = clusterLevels.findIndex((level) => canvasView.zoom <= level.maxZoom);
+    return index === -1 ? clusterLevels.length : index;
+}
+
+function activeClusterLevel() {
+    return clusterLevels[clusterLevelIndex()] || null;
+}
+
+function clusterDrilldownKey() {
+    if (!clusterDrilldown) {
+        return "top";
+    }
+
+    return `${clusterDrilldown.levelIndex}:${clusterDrilldown.uids.join(",")}`;
+}
+
+function resetClusterDrilldown() {
+    clusterDrilldown = null;
+    activeClusterExpansion = null;
+    renderedClusterSignature = "";
+}
+
+function clusterSignature() {
+    const marksKey = marks
+        .map((mark) => `${mark.dataset.uid}:${mark.dataset.x}:${mark.dataset.y}:${mark.style.getPropertyValue("--mark-color")}`)
+        .join("|");
+    return `${clusterLevelIndex()}|${clusterDrilldownKey()}|${marksKey}|${persistedClusterSignature()}`;
+}
+
+function currentClusters() {
+    const signature = clusterSignature();
+    if (signature !== clusterCacheSignature) {
+        const levelIndex = clusterLevelIndex();
+        clusterCacheSignature = signature;
+
+        const items = markClusterItemsForDrilldown();
+        const hierarchy = buildClusterHierarchy(items);
+
+        let result = null;
+        for (let i = levelIndex; i < clusterLevels.length; i += 1) {
+            if (hierarchy[i] && hierarchy[i].length > 0) {
+                result = hierarchy[i];
+                break;
+            }
+        }
+        clusterCache = result || items.map((item) => makeClusterNode([item], "mark"));
+    }
+
+    return clusterCache;
+}
+
+function buildClusterHierarchy(items) {
+    if (items.length === 0) {
+        return [makeEmptyHierarchy(), makeEmptyHierarchy(), makeEmptyHierarchy(), makeEmptyHierarchy()];
+    }
+
+    const sorted = [...items].sort((a, b) => a.uid.localeCompare(b.uid));
+
+    const neighbors = clusterMarksForRadius(sorted, clusterLevels[3].radius)
+        .map((n) => ({ ...n, level: "neighbor" }));
+
+    const systemItems = neighbors.map((n) => ({
+        uid: n.id,
+        x: n.x,
+        y: n.y,
+        allMarks: n.marks,
+    }));
+    const systemGroups = groupItemsByRadius(systemItems, clusterLevels[2].radius);
+    const systems = systemGroups.map((group) => {
+        const allMarks = group.flatMap((m) => m.allMarks);
+        return { ...makeClusterNode(itemsFromMarkElements(allMarks)), level: "system", marks: allMarks };
+    });
+
+    const galaxyItems = systems.map((s) => ({
+        uid: s.id,
+        x: s.x,
+        y: s.y,
+        allMarks: s.marks,
+    }));
+    const galaxyGroups = groupItemsByRadius(galaxyItems, clusterLevels[1].radius);
+    const galaxies = galaxyGroups.map((group) => {
+        const allMarks = group.flatMap((m) => m.allMarks);
+        return { ...makeClusterNode(itemsFromMarkElements(allMarks)), level: "galaxy", marks: allMarks };
+    });
+
+    const superItems = galaxies.map((g) => ({
+        uid: g.id,
+        x: g.x,
+        y: g.y,
+        allMarks: g.marks,
+    }));
+    const superGroups = groupItemsByRadius(superItems, clusterLevels[0].radius);
+    const superclusters = superGroups.map((group) => {
+        const allMarks = group.flatMap((m) => m.allMarks);
+        return { ...makeClusterNode(itemsFromMarkElements(allMarks)), level: "supercluster", marks: allMarks };
+    });
+
+    if (superclusters.length === galaxies.length && galaxies.length > 0) {
+        return [[], galaxies, systems, neighbors];
+    }
+    if (galaxies.length === systems.length && systems.length > 0) {
+        return [superclusters, [], systems, neighbors];
+    }
+    if (systems.length === neighbors.length && neighbors.length > 0) {
+        return [superclusters, galaxies, [], neighbors];
+    }
+
+    return [superclusters, galaxies, systems, neighbors];
+}
+
+function groupItemsByRadius(items, radius) {
+    const cell = radius || 1;
+    const grid = new Map();
+    const cellKey = (cx, cy) => `${cx},${cy}`;
+
+    items.forEach((item) => {
+        const cx = Math.floor(item.x / cell);
+        const cy = Math.floor(item.y / cell);
+        const key = cellKey(cx, cy);
+        const bucket = grid.get(key);
+        if (bucket) {
+            bucket.push(item);
+        } else {
+            grid.set(key, [item]);
+        }
+    });
+
+    const parent = new Map();
+    const find = (uid) => {
+        let p = parent.get(uid);
+        while (p !== uid) {
+            parent.set(uid, parent.get(p));
+            uid = p;
+            p = parent.get(uid);
+        }
+        return uid;
+    };
+    const union = (a, b) => {
+        const ra = find(a);
+        const rb = find(b);
+        if (ra !== rb) {
+            parent.set(ra, rb);
+        }
+    };
+
+    items.forEach((item) => {
+        parent.set(item.uid, item.uid);
+    });
+
+    const checked = new Set();
+    items.forEach((seed) => {
+        const scx = Math.floor(seed.x / cell);
+        const scy = Math.floor(seed.y / cell);
+
+        for (let dx = -1; dx <= 1; dx += 1) {
+            for (let dy = -1; dy <= 1; dy += 1) {
+                const bucket = grid.get(cellKey(scx + dx, scy + dy));
+                if (!bucket) {
+                    continue;
+                }
+                bucket.forEach((candidate) => {
+                    const pair = seed.uid < candidate.uid
+                        ? `${seed.uid}|${candidate.uid}`
+                        : `${candidate.uid}|${seed.uid}`;
+                    if (checked.has(pair)) {
+                        return;
+                    }
+                    checked.add(pair);
+                    if (Math.hypot(candidate.x - seed.x, candidate.y - seed.y) <= radius) {
+                        union(seed.uid, candidate.uid);
+                    }
+                });
+            }
+        }
+    });
+
+    const groups = new Map();
+    items.forEach((item) => {
+        const root = find(item.uid);
+        const group = groups.get(root);
+        if (group) {
+            group.push(item);
+        } else {
+            groups.set(root, [item]);
+        }
+    });
+
+    return [...groups.values()];
+}
+
+function itemsFromMarkElements(markElements) {
+    return markElements
+        .map((mark) => {
+            const x = Number.parseFloat(mark.dataset.x || "0");
+            const y = Number.parseFloat(mark.dataset.y || "0");
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                return null;
+            }
+            return { uid: mark.dataset.uid, mark, x, y };
+        })
+        .filter(Boolean);
+}
+
+function makeEmptyHierarchy() {
+    return [];
+}
+
+function clustersForLevelIndex(items, levelIndex) {
+    const hierarchy = buildClusterHierarchy(items);
+    return hierarchy[levelIndex] || items.map((item) => makeClusterNode([item], "mark"));
+}
+
+function clusterItemsFromMarks(markElements) {
+    return markElements.map(markToClusterItem).filter(Boolean);
+}
+
+function hasPersistedClusterData() {
+    return hasPersistedClusterPayload;
+}
+
+function clusterLevelKey(levelIndex) {
+    return clusterLevels[levelIndex]?.key || null;
+}
+
+function persistedClusterSignature() {
+    return [
+        persistedClusters
+            .map((cluster) => `${cluster.uid}:${cluster.level}:${cluster.parent_uid || ""}:${cluster.anchor_mark_uid}:${cluster.centroid_x}:${cluster.centroid_y}:${cluster.member_count}`)
+            .join("|"),
+        persistedClusterMemberships
+            .map((membership) => `${membership.cluster_uid}:${membership.mark_uid}:${membership.level}`)
+            .join("|"),
+    ].join("::");
+}
+
+function persistedClusterMembers(clusterUid, levelKey, allowedUids = null) {
+    const allowed = allowedUids ? new Set(allowedUids) : null;
+    const memberUids = persistedClusterMemberships
+        .filter((membership) => membership.cluster_uid === clusterUid && membership.level === levelKey)
+        .map((membership) => membership.mark_uid);
+
+    return memberUids
+        .filter((uid) => allowed === null || allowed.has(uid))
+        .map((uid) => marks.find((mark) => mark.dataset.uid === uid))
+        .filter(Boolean);
+}
+
+function makePersistedClusterNode(cluster, markElements) {
+    return {
+        id: cluster.uid,
+        level: cluster.level,
+        x: Number.parseFloat(cluster.centroid_x ?? cluster.anchor_x ?? "0"),
+        y: Number.parseFloat(cluster.centroid_y ?? cluster.anchor_y ?? "0"),
+        count: markElements.length,
+        marks: markElements,
+    };
+}
+
+function clusterHasVisualCollision(cluster) {
+    if (cluster.count <= 1) {
+        return false;
+    }
+
+    const bounds = boundsForMarks(cluster.marks);
+    if (!Number.isFinite(bounds.minX)) {
+        return false;
+    }
+
+    const width = (bounds.maxX - bounds.minX) * canvasView.zoom;
+    const height = (bounds.maxY - bounds.minY) * canvasView.zoom;
+
+    return Math.max(width, height) <= clusterVisualCollisionPx;
+}
+
+function persistedClustersForLevel(levelIndex, allowedUids = null, options = {}) {
+    const levelKey = clusterLevelKey(levelIndex);
+    if (!levelKey) {
+        const allowed = allowedUids ? new Set(allowedUids) : null;
+        return markClusterItems()
+            .filter((item) => allowed === null || allowed.has(item.uid))
+            .map((item) => makeClusterNode([item]));
+    }
+
+    const nodes = [];
+    const coveredUids = new Set();
+    persistedClusters
+        .filter((cluster) => cluster.level === levelKey)
+        .forEach((cluster) => {
+            const members = persistedClusterMembers(cluster.uid, levelKey, allowedUids);
+            if (members.length === 0) {
+                return;
+            }
+            members.forEach((mark) => coveredUids.add(mark.dataset.uid));
+
+            const node = makePersistedClusterNode(cluster, members);
+            if (options.structural || node.count >= 2 && clusterHasVisualCollision(node)) {
+                nodes.push(node);
+                return;
+            }
+
+            nodes.push(...persistedClustersForLevel(levelIndex + 1, members.map((mark) => mark.dataset.uid), options));
+        });
+
+    const allowed = allowedUids ? new Set(allowedUids) : null;
+    markClusterItems()
+        .filter((item) => allowed === null || allowed.has(item.uid))
+        .filter((item) => !coveredUids.has(item.uid))
+        .forEach((item) => nodes.push(makeClusterNode([item])));
+
+    return nodes;
+}
+
+function explodedClusterChildren(cluster, currentLevelIndex) {
+    const items = clusterItemsFromMarks(cluster.marks);
+    for (let levelIndex = currentLevelIndex + 1; levelIndex <= clusterLevels.length; levelIndex += 1) {
+        const children = clustersForLevelIndex(items, levelIndex);
+        const hasVisibleExplosion = children.length > 1
+            || children.some((child) => child.count === 1)
+            || levelIndex >= clusterLevels.length;
+
+        if (hasVisibleExplosion) {
+            return { levelIndex, children };
+        }
+    }
+
+    return {
+        levelIndex: clusterLevels.length,
+        children: clustersForLevelIndex(items, clusterLevels.length),
+    };
+}
+
+function boundsForClusterChildren(children) {
+    return children.reduce((bounds, child) => ({
+        minX: Math.min(bounds.minX, child.x),
+        maxX: Math.max(bounds.maxX, child.x),
+        minY: Math.min(bounds.minY, child.y),
+        maxY: Math.max(bounds.maxY, child.y),
+    }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
 }
 
 function mapClusterShape(cluster) {
@@ -819,12 +1442,112 @@ function mapClusterShape(cluster) {
             : "circle";
 }
 
-function mapClusterColor(cluster) {
-    if (cluster.marks.length !== 1) {
-        return "#2f2a22";
+function averageMarkColor(markElements) {
+    const channels = markElements
+        .map((mark) => /^#([0-9a-f]{6})$/i.exec(mark.style.getPropertyValue("--mark-color").trim()))
+        .filter(Boolean)
+        .map((match) => Number.parseInt(match[1], 16));
+
+    if (channels.length === 0) {
+        return "#3a3550";
     }
 
-    return cluster.marks[0].style.getPropertyValue("--mark-color") || "#d9826b";
+    const channel = (shift) => Math.round(
+        channels.reduce((total, value) => total + ((value >> shift) & 255), 0) / channels.length,
+    ).toString(16).padStart(2, "0");
+
+    return `#${channel(16)}${channel(8)}${channel(0)}`;
+}
+
+function mapClusterColor(cluster) {
+    if (cluster.marks.length === 1) {
+        return cluster.marks[0].style.getPropertyValue("--mark-color") || "#d9826b";
+    }
+
+    return averageMarkColor(cluster.marks);
+}
+
+function startClusterExpansion(cluster, expandsToMarks) {
+    const currentLevelIdx = clusterLevelIndex();
+    const levelWeight = Math.max(0, currentLevelIdx);
+    const duration = 760 + (levelWeight * 70);
+    activeClusterExpansion = {
+        x: cluster.x,
+        y: cluster.y,
+        strength: levelWeight,
+        until: performance.now() + duration,
+    };
+
+    cluster.marks.forEach((mark) => {
+        const x = Number.parseFloat(mark.dataset.x || "0");
+        const y = Number.parseFloat(mark.dataset.y || "0");
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return;
+        }
+
+        mark.style.setProperty("--mark-expand-x", `${cluster.x - x}px`);
+        mark.style.setProperty("--mark-expand-y", `${cluster.y - y}px`);
+        mark.style.setProperty("--mark-expand-scale", expandsToMarks ? "0.08" : "0.42");
+        mark.dataset.expanding = "true";
+    });
+
+    window.setTimeout(() => {
+        if (activeClusterExpansion && activeClusterExpansion.until <= performance.now()) {
+            activeClusterExpansion = null;
+        }
+        cluster.marks.forEach((mark) => {
+            delete mark.dataset.expanding;
+            mark.style.removeProperty("--mark-expand-x");
+            mark.style.removeProperty("--mark-expand-y");
+            mark.style.removeProperty("--mark-expand-scale");
+        });
+    }, duration);
+}
+
+function zoomIntoCluster(cluster) {
+    if (!canvas || !cluster) {
+        return;
+    }
+
+    const currentLevelIndex = clusterLevelIndex();
+    const currentLevel = activeClusterLevel();
+    const explosion = explodedClusterChildren(cluster, currentLevelIndex);
+    const nextLevel = clusterLevels[explosion.levelIndex] || null;
+    const targetBounds = boundsForClusterChildren(explosion.children);
+    if (!Number.isFinite(targetBounds.minX)) {
+        return;
+    }
+
+    const showsIndividualMarks = explosion.levelIndex >= clusterLevels.length;
+    startClusterExpansion(cluster, showsIndividualMarks);
+
+    clusterDrilldown = {
+        levelIndex: currentLevelIndex,
+        uids: cluster.marks.map((mark) => mark.dataset.uid).sort(),
+    };
+    clusterCacheSignature = "";
+    renderedClusterSignature = "";
+
+    const view = canvasViewForBounds(targetBounds, {
+        padding: Math.max(nextLevel?.padding ?? currentLevel?.padding ?? 84, 128),
+        minSpan: 1,
+        minZoom: canvasView.zoom,
+        maxZoom: maxCanvasZoom,
+    });
+    leaveFitWorldMode();
+    animateCanvasViewTo(view, 620, {
+        easing: easeInOutCubic,
+        onComplete: () => {
+            clusterDrilldown = {
+                levelIndex: explosion.levelIndex,
+                uids: cluster.marks.map((mark) => mark.dataset.uid).sort(),
+            };
+            clusterCacheSignature = "";
+            renderedClusterSignature = "";
+            renderMarksForViewport();
+            renderMapClusters();
+        },
+    });
 }
 
 function renderMapClusters() {
@@ -832,87 +1555,82 @@ function renderMapClusters() {
         return;
     }
 
-    const isMapView = canvasView.zoom < mapModeZoom;
-    if (isMapView !== renderedClusterMode) {
-        renderedClusterMode = isMapView;
-        renderedClusterSignature = "";
-    }
+    const clusters = currentClusters();
+    const level = activeClusterLevel();
+    const bubbles = clusters.filter((cluster) => cluster.count > 1);
 
-    if (!isMapView) {
-        if (renderedClusterSignature !== "hidden") {
-            mapClusters.innerHTML = "";
-            renderedClusterSignature = "hidden";
-        }
-        return;
-    }
+    const coveredUids = new Set();
+    bubbles.forEach((cluster) => cluster.marks.forEach((mark) => coveredUids.add(mark.dataset.uid)));
+    const drilldownUids = clusterDrilldown ? new Set(clusterDrilldown.uids) : null;
+    marks.forEach((mark) => {
+        const outsideDrilldown = drilldownUids !== null && !drilldownUids.has(mark.dataset.uid);
+        mark.classList.toggle("is-clustered", coveredUids.has(mark.dataset.uid) || outsideDrilldown);
+    });
 
-    const cellSize = clusterCellSizeForZoom(canvasView.zoom);
-    const markSignature = marks
-        .map((mark) => `${mark.dataset.uid}:${mark.dataset.x}:${mark.dataset.y}:${mark.className}:${mark.style.getPropertyValue("--mark-color")}`)
-        .join("|");
-    const signature = `${cellSize}:${worldBounds.minX}:${worldBounds.minY}:${markSignature}`;
+    const signature = `${clusterCacheSignature}:${worldBounds.minX}:${worldBounds.minY}`;
     if (signature === renderedClusterSignature) {
         return;
     }
-
     renderedClusterSignature = signature;
     mapClusters.innerHTML = "";
 
-    const clusters = new Map();
-    marks.forEach((mark) => {
-        const x = Number.parseFloat(mark.dataset.x || "0");
-        const y = Number.parseFloat(mark.dataset.y || "0");
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
-            return;
-        }
-
-        const clusterX = Math.floor(x / cellSize);
-        const clusterY = Math.floor(y / cellSize);
-        const key = `${clusterX},${clusterY}`;
-        const cluster = clusters.get(key) || {
-            xTotal: 0,
-            yTotal: 0,
-            marks: [],
-        };
-
-        cluster.xTotal += x;
-        cluster.yTotal += y;
-        cluster.marks.push(mark);
-        clusters.set(key, cluster);
-    });
-
-    clusters.forEach((cluster) => {
-        const count = cluster.marks.length;
-        const x = cluster.xTotal / count;
-        const y = cluster.yTotal / count;
-        const button = document.createElement("button");
-        const size = Math.min(44, 18 + (Math.sqrt(count) * 7));
+    bubbles.forEach((cluster) => {
+        const count = cluster.count;
         const shape = mapClusterShape(cluster);
+        const size = Math.min(46, 18 + (Math.sqrt(count) * 7));
+        const buttonLevelKey = cluster.level || level?.key || "marks";
+        const buttonLevel = clusterLevels.find((item) => item.key === buttonLevelKey) || level;
+        const button = document.createElement("button");
 
+        const levelWeight = Math.max(0, clusterLevels.findIndex((item) => item.key === buttonLevelKey));
+        const expanding = activeClusterExpansion && activeClusterExpansion.until > performance.now();
+        const expandFrom = expanding
+            ? {
+                x: activeClusterExpansion.x - cluster.x,
+                y: activeClusterExpansion.y - cluster.y,
+                strength: activeClusterExpansion.strength,
+            }
+            : { x: 0, y: 0, strength: 0 };
+
+        const levelClass = buttonLevelKey !== "marks" ? ` level-${buttonLevelKey}` : "";
         button.type = "button";
         button.className = count > 1
-            ? `map-cluster ${shape} is-multi`
+            ? `map-cluster ${shape} is-multi${levelClass}`
             : `map-cluster ${shape}`;
-        button.style.setProperty("--cluster-x", `${x - worldBounds.minX}px`);
-        button.style.setProperty("--cluster-y", `${y - worldBounds.minY}px`);
+        button.style.setProperty("--cluster-x", `${cluster.x - worldBounds.minX}px`);
+        button.style.setProperty("--cluster-y", `${cluster.y - worldBounds.minY}px`);
         button.style.setProperty("--cluster-screen-size", `${size}px`);
         button.style.setProperty("--cluster-color", mapClusterColor(cluster));
+        button.style.setProperty("--cluster-expand-x", `${expandFrom.x}px`);
+        button.style.setProperty("--cluster-expand-y", `${expandFrom.y}px`);
+        button.style.setProperty("--cluster-expand-scale", String(Math.max(0.18, 0.55 - (expandFrom.strength * 0.05))));
+        button.style.setProperty("--cluster-pulse-scale", String(Math.max(0.28, 0.62 - (levelWeight * 0.07))));
+        button.style.setProperty("--cluster-pulse-ring", `${8 + (levelWeight * 5)}px`);
         button.dataset.count = String(count);
-        button.setAttribute("aria-label", count === 1
-            ? `View mark by ${cluster.marks[0].dataset.name}`
-            : `Zoom to ${count} marks`);
+        button.dataset.clusterId = cluster.id;
+        button.dataset.clusterLevel = buttonLevelKey;
+        button.setAttribute("aria-pressed", "false");
+
         if (count > 1) {
+            const levelLabel = buttonLevelKey === "neighbor" ? "N"
+                : buttonLevelKey === "system" ? "S"
+                : buttonLevelKey === "galaxy" ? "G"
+                : buttonLevelKey === "supercluster" ? "SC"
+                : "";
             button.textContent = String(count);
+            button.dataset.levelLabel = levelLabel;
+            button.setAttribute("aria-label", `Zoom in to ${count} marks in this ${buttonLevel?.label || "cluster"}`);
+        } else {
+            button.setAttribute("aria-label", `View mark by ${cluster.marks[0].dataset.name}`);
         }
+
         button.addEventListener("click", (event) => {
             event.stopPropagation();
             if (count === 1) {
                 focusMark(cluster.marks[0], 1.45);
                 return;
             }
-
-            const nextZoom = Math.min(1.2, Math.max(mapModeZoom + 0.08, canvasView.zoom * 1.8));
-            focusCanvasOnCoordinate(x, y, nextZoom);
+            zoomIntoCluster(cluster);
         });
 
         mapClusters.appendChild(button);
@@ -997,6 +1715,88 @@ function rebuildMarkPositionCache() {
     marks.forEach(cacheMarkPosition);
 }
 
+function bufferedWorldBounds(bounds, tileBuffer) {
+    const buffer = tileBuffer * tileSize;
+
+    return {
+        minX: Math.max(minCoordinate, bounds.minX - buffer),
+        maxX: Math.min(maxCoordinate, bounds.maxX + buffer),
+        minY: Math.max(minCoordinate, bounds.minY - buffer),
+        maxY: Math.min(maxCoordinate, bounds.maxY + buffer),
+    };
+}
+
+function markIsInsideBounds(mark, bounds) {
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+
+    return Number.isFinite(x) && Number.isFinite(y)
+        && x >= bounds.minX && x <= bounds.maxX
+        && y >= bounds.minY && y <= bounds.maxY;
+}
+
+function mountMark(mark, fragment = null) {
+    if (!canvasWorld || mark.parentElement === canvasWorld) {
+        return;
+    }
+
+    if (fragment) {
+        fragment.appendChild(mark);
+    } else {
+        canvasWorld.appendChild(mark);
+    }
+}
+
+function unmountMark(mark) {
+    if (mark.parentElement === canvasWorld) {
+        mark.remove();
+    }
+}
+
+function renderMarksForViewport() {
+    if (!canvas || !canvasWorld) {
+        return;
+    }
+
+    const bounds = bufferedWorldBounds(visibleWorldBounds(), markRenderBuffer);
+    const selectedMark = marks.find((mark) => mark.dataset.selected === "true");
+    const fragment = document.createDocumentFragment();
+    const nextRenderedMarkUids = new Set();
+
+    marks.forEach((mark) => {
+        const shouldRender = mark === selectedMark || markIsInsideBounds(mark, bounds);
+
+        if (shouldRender) {
+            positionMarkElement(mark);
+            mountMark(mark, fragment);
+            nextRenderedMarkUids.add(mark.dataset.uid);
+            return;
+        }
+
+        unmountMark(mark);
+    });
+
+    if (fragment.childNodes.length > 0) {
+        canvasWorld.appendChild(fragment);
+    }
+
+    renderedMarkUids.clear();
+    nextRenderedMarkUids.forEach((uid) => renderedMarkUids.add(uid));
+    if (canvas) {
+        canvas.dataset.markCulling = "viewport";
+        canvas.dataset.renderedMarkCount = String(renderedMarkUids.size);
+        canvas.dataset.totalMarkCount = String(marks.length);
+    }
+}
+
+function clearRenderedMarkCache() {
+    renderedMarkUids.clear();
+    if (canvas) {
+        delete canvas.dataset.renderedMarkCount;
+        delete canvas.dataset.totalMarkCount;
+    }
+}
+
 function applyCanvasView(options = {}) {
     const shouldClamp = options.clamp !== false;
     if (shouldClamp) {
@@ -1011,6 +1811,7 @@ function applyCanvasView(options = {}) {
         positionAllMarks();
         geometryDirty = false;
     }
+    renderMarksForViewport();
     positionPlacementMarker();
     canvas.style.setProperty("--canvas-pan-x", `${canvasView.panX}px`);
     canvas.style.setProperty("--canvas-pan-y", `${canvasView.panY}px`);
@@ -1179,6 +1980,12 @@ function rebuildWorldForCurrentMarks() {
     commitTilesForMarks(marks);
     updateWorldBounds();
     geometryDirty = true;
+    clearRenderedTileCache();
+    clearRenderedMarkCache();
+    resetClusterDrilldown();
+    clusterCache = [];
+    clusterCacheSignature = "";
+    renderedClusterSignature = "";
     applyCanvasView();
 }
 
@@ -1231,16 +2038,25 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
     }
 
     cancelCanvasViewAnimation();
+    canvas.classList.add("is-cluster-transition");
 
     if (duration <= 0) {
         canvasView = nextView;
         applyCanvasView(options);
+        if (options.onComplete) {
+            options.onComplete();
+        }
+        window.setTimeout(() => canvas.classList.remove("is-cluster-transition"), 220);
         return;
     }
 
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         canvasView = nextView;
         applyCanvasView(options);
+        if (options.onComplete) {
+            options.onComplete();
+        }
+        canvas.classList.remove("is-cluster-transition");
         return;
     }
 
@@ -1265,6 +2081,10 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
             viewAnimation = null;
             canvasView = nextView;
             applyCanvasView(options);
+            if (options.onComplete) {
+                options.onComplete();
+            }
+            window.setTimeout(() => canvas.classList.remove("is-cluster-transition"), 220);
         }
     };
 
@@ -1302,6 +2122,7 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
         return;
     }
 
+    resetClusterDrilldown();
     const rect = canvas.getBoundingClientRect();
     const zoom = clampZoom(Math.max(1, targetZoom));
 
@@ -1311,6 +2132,27 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
         panY: (rect.height / 2) - ((y - worldBounds.minY) * zoom),
     });
     leaveFitWorldMode();
+}
+
+function canvasViewForBounds(bounds, options = {}) {
+    const rect = canvas.getBoundingClientRect();
+    const padding = options.padding ?? 96;
+    const minSpan = options.minSpan ?? tileSize * 0.45;
+    const minZoom = options.minZoom ?? 0;
+    const maxZoom = options.maxZoom ?? maxCanvasZoom;
+    const width = Math.max(bounds.maxX - bounds.minX, minSpan);
+    const height = Math.max(bounds.maxY - bounds.minY, minSpan);
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    const availableWidth = Math.max(1, rect.width - (padding * 2));
+    const availableHeight = Math.max(1, rect.height - (padding * 2));
+    const zoom = clampZoom(Math.max(minZoom, Math.min(maxZoom, availableWidth / width, availableHeight / height)));
+
+    return {
+        zoom,
+        panX: (rect.width / 2) - ((centerX - worldBounds.minX) * zoom),
+        panY: (rect.height / 2) - ((centerY - worldBounds.minY) * zoom),
+    };
 }
 
 function fitWorldZoom() {
@@ -1361,6 +2203,9 @@ function zoomCanvasTo(targetZoom, origin = null, options = {}) {
     }
 
     cancelCanvasViewAnimation();
+    if (!options.keepClusterDrilldown) {
+        resetClusterDrilldown();
+    }
     const rect = canvas.getBoundingClientRect();
     const currentView = renderedCanvasView();
     canvasView = currentView;
@@ -1413,6 +2258,7 @@ function resetCanvasView() {
     }
 
     cancelCanvasViewAnimation();
+    resetClusterDrilldown();
     canvasView = {
         zoom: 1,
         panX: worldBounds.minX,
@@ -1657,6 +2503,8 @@ function hideMarkPopout() {
 
 function selectMark(mark, options = {}) {
     marks.forEach((item) => item.removeAttribute("data-selected"));
+    mountMark(mark);
+    positionMarkElement(mark);
     mark.setAttribute("data-selected", "true");
     markPreview?.classList.remove("is-empty");
 
@@ -1690,6 +2538,7 @@ function focusMark(mark, targetZoom = 1.35, options = {}) {
         return;
     }
 
+    mountMark(mark);
     selectMark(mark, { showPopout: options.showPopout !== false });
     focusCanvasOnCoordinate(
         Number.parseFloat(mark.dataset.x || "0"),
@@ -1787,6 +2636,7 @@ function removeMarkElement(mark) {
     const wasSelected = mark.dataset.selected === "true";
     marks = marks.filter((item) => item !== mark);
     markPositions.delete(mark.dataset.uid);
+    renderedMarkUids.delete(mark.dataset.uid);
     mark.remove();
     rebuildWorldForCurrentMarks();
 
@@ -1822,7 +2672,6 @@ function addOrUpdateMark(mark, select = false, options = {}) {
     }
 
     const element = createMarkElement(mark);
-    canvasWorld.appendChild(element);
     marks.push(element);
     cacheMarkPosition(element);
     const tileX = Math.floor(Number.parseFloat(mark.x ?? "0") / tileSize);
@@ -1835,7 +2684,10 @@ function addOrUpdateMark(mark, select = false, options = {}) {
         animateNewMark(element);
     }
     if (select) {
+        mountMark(element);
         selectMark(element);
+    } else {
+        renderMarksForViewport();
     }
     return element;
 }
@@ -1940,6 +2792,7 @@ function removeMissingMarks(markUids, options = {}) {
 
         mark.remove();
         markPositions.delete(mark.dataset.uid);
+        renderedMarkUids.delete(mark.dataset.uid);
         return false;
     });
 
@@ -2269,6 +3122,11 @@ function syncMarks(payload) {
     const markItems = payload.marks.map(apiMarkToView);
     const recentMarks = (payload.recent_marks || payload.marks).map(apiMarkToView);
     const existingUids = new Set(marks.map((mark) => mark.dataset.uid));
+    hasPersistedClusterPayload = Array.isArray(payload.clusters) && Array.isArray(payload.cluster_memberships);
+    persistedClusters = hasPersistedClusterPayload ? payload.clusters : [];
+    persistedClusterMemberships = hasPersistedClusterPayload ? payload.cluster_memberships : [];
+    clusterCacheSignature = "";
+    renderedClusterSignature = "";
     markItems.forEach((mark) => addOrUpdateMark(mark, false, { deferLayout: true }));
     removeMissingMarks(payload.mark_uids, { deferLayout: true });
     rebuildMarkPositionCache();
@@ -2291,6 +3149,19 @@ function syncMarks(payload) {
 
 window.addEventListener("test:syncMarks", (event) => {
     syncMarks(event.detail);
+});
+
+window.addEventListener("test:setCanvasView", (event) => {
+    if (!event.detail) {
+        return;
+    }
+
+    canvasView = {
+        zoom: Number(event.detail.zoom ?? canvasView.zoom),
+        panX: Number(event.detail.panX ?? canvasView.panX),
+        panY: Number(event.detail.panY ?? canvasView.panY),
+    };
+    applyCanvasView({ clamp: event.detail.clamp !== false });
 });
 
 async function refreshRecentMarks() {
