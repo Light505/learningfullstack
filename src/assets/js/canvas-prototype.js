@@ -99,9 +99,12 @@ const markRenderBuffer = 2;
 
 function snapGridDivisionForZoom(zoom) {
     if (zoom >= 0.9) return 1;
-    if (zoom >= 0.4) return 3;
-    if (zoom >= 0.2) return 5;
-    if (zoom >= 0.1) return 7;
+    if (zoom >= 0.6) return 3;
+    if (zoom >= 0.3) return 5;
+    if (zoom >= 0.15) return 7;
+    if (zoom >= 0.08) return 9;
+    if (zoom >= 0.04) return 11;
+    if (zoom >= 0.015) return 13;
     return 0;
 }
 
@@ -169,6 +172,8 @@ let geometryDirty = true;
 let renderedTileSignature = "";
 let renderedFogSignature = "";
 let renderedClusterSignature = "";
+let previousClusterLevelIndex = -1;
+let previousMarkClusterCenter = new Map();
 let clusterCache = [];
 let clusterCacheSignature = "";
 let clusterDrilldown = null;
@@ -1488,7 +1493,9 @@ function startClusterExpansion(cluster, expandsToMarks) {
         mark.style.setProperty("--mark-expand-x", `${cluster.x - x}px`);
         mark.style.setProperty("--mark-expand-y", `${cluster.y - y}px`);
         mark.style.setProperty("--mark-expand-scale", expandsToMarks ? "0.08" : "0.42");
-        mark.dataset.expanding = "true";
+        if (expandsToMarks) {
+            mark.dataset.expanding = "true";
+        }
     });
 
     window.setTimeout(() => {
@@ -1519,7 +1526,13 @@ function zoomIntoCluster(cluster) {
     }
 
     const showsIndividualMarks = explosion.levelIndex >= clusterLevels.length;
-    startClusterExpansion(cluster, showsIndividualMarks);
+
+    activeClusterExpansion = {
+        x: cluster.x,
+        y: cluster.y,
+        strength: Math.max(0, currentLevelIndex),
+        until: performance.now() + (760 + (Math.max(0, currentLevelIndex) * 70)),
+    };
 
     clusterDrilldown = {
         levelIndex: currentLevelIndex,
@@ -1547,6 +1560,31 @@ function zoomIntoCluster(cluster) {
             renderedClusterSignature = "";
             renderMarksForViewport();
             renderMapClusters();
+
+            if (showsIndividualMarks) {
+                cluster.marks.forEach((mark) => {
+                    const x = Number.parseFloat(mark.dataset.x || "0");
+                    const y = Number.parseFloat(mark.dataset.y || "0");
+                    mark.style.setProperty("--mark-expand-x", `${cluster.x - x}px`);
+                    mark.style.setProperty("--mark-expand-y", `${cluster.y - y}px`);
+                    mark.style.setProperty("--mark-expand-scale", "0.08");
+                    mark.dataset.expanding = "true";
+                });
+                window.setTimeout(() => {
+                    cluster.marks.forEach((mark) => {
+                        delete mark.dataset.expanding;
+                        mark.style.removeProperty("--mark-expand-x");
+                        mark.style.removeProperty("--mark-expand-y");
+                        mark.style.removeProperty("--mark-expand-scale");
+                    });
+                    activeClusterExpansion = null;
+                }, 540);
+            } else {
+                window.setTimeout(() => {
+                    activeClusterExpansion = null;
+                }, 540);
+            }
+
             window.setTimeout(() => canvas.classList.remove("is-cluster-transition"), 220);
         },
     });
@@ -1562,12 +1600,63 @@ function renderMapClusters() {
     const bubbles = clusters.filter((cluster) => cluster.count > 1);
 
     const coveredUids = new Set();
-    bubbles.forEach((cluster) => cluster.marks.forEach((mark) => coveredUids.add(mark.dataset.uid)));
+    const markClusterCenter = new Map();
+    bubbles.forEach((cluster) => {
+        cluster.marks.forEach((mark) => {
+            coveredUids.add(mark.dataset.uid);
+            markClusterCenter.set(mark.dataset.uid, { x: cluster.x, y: cluster.y });
+        });
+    });
     const drilldownUids = clusterDrilldown ? new Set(clusterDrilldown.uids) : null;
+    const levelIndex = clusterLevelIndex();
+    const zoomingOut = levelIndex < previousClusterLevelIndex;
+    const zoomingIn = levelIndex > previousClusterLevelIndex;
+    const levelChanged = zoomingOut || zoomingIn;
+
     marks.forEach((mark) => {
         const outsideDrilldown = drilldownUids !== null && !drilldownUids.has(mark.dataset.uid);
-        mark.classList.toggle("is-clustered", coveredUids.has(mark.dataset.uid) || outsideDrilldown);
+        const shouldCluster = coveredUids.has(mark.dataset.uid) || outsideDrilldown;
+        const wasClustered = mark.classList.contains("is-clustered");
+
+        mark.classList.toggle("is-clustered", shouldCluster);
+
+        if (shouldCluster && (!wasClustered || zoomingOut)) {
+            const center = markClusterCenter.get(mark.dataset.uid);
+            if (center) {
+                const mx = Number.parseFloat(mark.dataset.x || "0");
+                const my = Number.parseFloat(mark.dataset.y || "0");
+                mark.style.setProperty("--coalesce-x", `${center.x - mx}px`);
+                mark.style.setProperty("--coalesce-y", `${center.y - my}px`);
+            }
+            mark.dataset.coalescing = "true";
+            window.setTimeout(() => {
+                delete mark.dataset.coalescing;
+                mark.style.removeProperty("--coalesce-x");
+                mark.style.removeProperty("--coalesce-y");
+            }, 400);
+        }
+
+        if (!shouldCluster && (wasClustered || zoomingIn)) {
+            const oldCenter = previousMarkClusterCenter.get(mark.dataset.uid);
+            if (oldCenter) {
+                const mx = Number.parseFloat(mark.dataset.x || "0");
+                const my = Number.parseFloat(mark.dataset.y || "0");
+                mark.style.setProperty("--mark-expand-x", `${oldCenter.x - mx}px`);
+                mark.style.setProperty("--mark-expand-y", `${oldCenter.y - my}px`);
+                mark.style.setProperty("--mark-expand-scale", "0.08");
+            }
+            mark.dataset.expanding = "true";
+            window.setTimeout(() => {
+                delete mark.dataset.expanding;
+                mark.style.removeProperty("--mark-expand-x");
+                mark.style.removeProperty("--mark-expand-y");
+                mark.style.removeProperty("--mark-expand-scale");
+            }, 540);
+        }
     });
+
+    previousClusterLevelIndex = levelIndex;
+    previousMarkClusterCenter = markClusterCenter;
 
     const signature = `${clusterCacheSignature}:${worldBounds.minX}:${worldBounds.minY}`;
     if (signature === renderedClusterSignature) {
