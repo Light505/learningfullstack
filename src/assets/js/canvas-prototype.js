@@ -79,9 +79,9 @@ const tileViewStopCounts = [3, 7, 13];
 const maxTileOverviewStopCount = 25;
 const worldViewStopFractions = [0.25, 0.5, 1];
 const clusterLevels = [
-    { key: "supercluster", label: "supercluster", radius: tileSize * 16, maxZoom: 0.14, padding: 120 },
-    { key: "galaxy", label: "galaxy cluster", radius: tileSize * 6, maxZoom: 0.28, padding: 108 },
-    { key: "system", label: "system cluster", radius: tileSize * 2, maxZoom: 0.62, padding: 96 },
+    { key: "supercluster", label: "supercluster", radius: tileSize * 16, maxZoom: 0.02, padding: 120 },
+    { key: "galaxy", label: "galaxy cluster", radius: tileSize * 6, maxZoom: 0.08, padding: 108 },
+    { key: "system", label: "system cluster", radius: tileSize * 2, maxZoom: 0.25, padding: 96 },
     { key: "neighbor", label: "neighbor cluster", radius: tileSize * 0.55, maxZoom: 1.15, padding: 84 },
 ];
 const clusterVisualCollisionPx = 72;
@@ -1527,6 +1527,7 @@ function zoomIntoCluster(cluster) {
     };
     clusterCacheSignature = "";
     renderedClusterSignature = "";
+    canvas.classList.add("is-cluster-transition");
 
     const view = canvasViewForBounds(targetBounds, {
         padding: Math.max(nextLevel?.padding ?? currentLevel?.padding ?? 84, 128),
@@ -1546,6 +1547,7 @@ function zoomIntoCluster(cluster) {
             renderedClusterSignature = "";
             renderMarksForViewport();
             renderMapClusters();
+            window.setTimeout(() => canvas.classList.remove("is-cluster-transition"), 220);
         },
     });
 }
@@ -2038,7 +2040,6 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
     }
 
     cancelCanvasViewAnimation();
-    canvas.classList.add("is-cluster-transition");
 
     if (duration <= 0) {
         canvasView = nextView;
@@ -2046,7 +2047,6 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
         if (options.onComplete) {
             options.onComplete();
         }
-        window.setTimeout(() => canvas.classList.remove("is-cluster-transition"), 220);
         return;
     }
 
@@ -2056,7 +2056,6 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
         if (options.onComplete) {
             options.onComplete();
         }
-        canvas.classList.remove("is-cluster-transition");
         return;
     }
 
@@ -2084,7 +2083,6 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
             if (options.onComplete) {
                 options.onComplete();
             }
-            window.setTimeout(() => canvas.classList.remove("is-cluster-transition"), 220);
         }
     };
 
