@@ -43,6 +43,18 @@ development. That starts the web app, MySQL, and phpMyAdmin.
 npm run test:playwright
 ```
 
+Canvas benchmark:
+
+```powershell
+npm run benchmark:canvas
+npm run benchmark:canvas -- --marks=10000 --output=test-results/canvas-benchmark.json
+```
+
+The benchmark uses Playwright to inject synthetic marks through the existing
+test hooks, records canvas hot-path timings, and reports frame summaries for
+fit-world, detail pan, and map pan scenarios. Keep Docker running at
+`http://localhost:8080` before running it.
+
 ## Main Files
 
 ```text
