@@ -1999,10 +1999,6 @@ function renderMapClusters() {
 
         button.addEventListener("click", (event) => {
             event.stopPropagation();
-            if (button.dataset.selectedCluster === "true") {
-                focusSelectedMarkThroughClusters();
-                return;
-            }
             if (count === 1) {
                 focusMark(cluster.marks[0], 1.45);
                 return;

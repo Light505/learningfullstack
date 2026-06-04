@@ -479,7 +479,7 @@ test.describe("responsive app layout", () => {
     expect(minZoom).toBeGreaterThan(fitZoom * 1.8);
   });
 
-  test("selected cluster indicator returns to the selected mark", async ({ page }) => {
+  test("selected cluster indicator remains visual while cluster click drills down", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
 
@@ -520,8 +520,10 @@ test.describe("responsive app layout", () => {
     await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toBeVisible();
 
     await page.locator(".map-cluster[data-selected-cluster='true']").click();
-    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Ring Return", { timeout: 8000 });
-    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
+    await expect.poll(async () => page.locator(".map-cluster[data-cluster-level='neighbor']").count()).toBe(2);
+    await expect(page.locator(".map-cluster[data-selected-cluster='true'][data-cluster-level='neighbor']")).toBeVisible();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Ring Return");
+    await expect(page.locator("[data-mark-popout]")).toBeHidden();
   });
 
   test("supports bounded keyboard-modified pan and zoom controls", async ({ page }) => {
