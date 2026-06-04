@@ -971,6 +971,69 @@ test.describe("responsive app layout", () => {
     await expect(page.locator(".map-cluster[data-cluster-level='system']")).toHaveCount(1);
   });
 
+  test("absorbs lone marks into eligible cluster levels while leaving far marks individual", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["system-neighbor-1a", 0, 0],
+        ["system-neighbor-1b", 80, 80],
+        ["system-neighbor-2a", 1200, 0],
+        ["system-neighbor-2b", 1280, 80],
+        ["system-lone", 640, 1500],
+        ["galaxy-system-a-1", 20000, 0],
+        ["galaxy-system-a-2", 20080, 80],
+        ["galaxy-system-a-3", 21200, 0],
+        ["galaxy-system-a-4", 21280, 80],
+        ["galaxy-system-b-1", 23600, 0],
+        ["galaxy-system-b-2", 23680, 80],
+        ["galaxy-system-b-3", 24800, 0],
+        ["galaxy-system-b-4", 24880, 80],
+        ["galaxy-lone", 22440, 5000],
+        ["far-lone", 70000, 70000],
+      ].map(([name, x, y], index) => ({
+        uid: `absorb-${name}-${now}`,
+        display_name: name,
+        message: "Absorption probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator(".map-cluster[data-cluster-level='galaxy']", { hasText: "9" })).toBeVisible();
+    await expect(page.locator(".map-cluster[data-cluster-level='system']", { hasText: "5" })).toBeVisible();
+    const visibleClusterCounts = await page.locator(".map-cluster").evaluateAll((clusters) => (
+      clusters.map((cluster) => Number.parseInt(cluster.dataset.count || "0", 10))
+    ));
+    expect(visibleClusterCounts.reduce((total, count) => total + count, 0)).toBe(14);
+
+    for (let index = 0; index < 5; index += 1) {
+      await page.keyboard.press("=");
+      await page.waitForTimeout(260);
+      if (await page.locator(".map-cluster[data-cluster-level='system']", { hasText: "5" }).count() > 0) {
+        break;
+      }
+    }
+
+    await expect(page.locator(".map-cluster[data-cluster-level='system']", { hasText: "5" })).toBeVisible();
+  });
+
   test("clicking a system cluster stops at neighbor bubbles and neighbor open stays capped", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
@@ -1156,6 +1219,9 @@ test.describe("responsive app layout", () => {
     }
     await expect.poll(async () => page.locator(".map-cluster[data-cluster-level='neighbor']").count()).toBeGreaterThanOrEqual(2);
 
+    await expect.poll(async () => page.evaluate(() => (
+      window.__clusterExplodeEvents.some((event) => event.level === "neighbor")
+    ))).toBe(true);
     const explodeEvents = await page.evaluate(() => window.__clusterExplodeEvents);
     expect(explodeEvents.some((event) => event.level === "neighbor")).toBe(true);
     expect(explodeEvents.some((event) => event.x.trim() !== "0px" || event.y.trim() !== "0px")).toBe(true);
@@ -1229,6 +1295,102 @@ test.describe("responsive app layout", () => {
     expect(recentEvents.length).toBeGreaterThan(0);
     expect(recentEvents).toContain("galaxy");
     expect(recentEvents).toContain("system");
+  });
+
+  test("recent mark focus traverses shared cluster ancestry instead of jumping to world view", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["current-target", 0, 0],
+        ["current-neighbor", 80, 80],
+        ["current-system-neighbor", 1200, 0],
+        ["current-system-neighbor-mate", 1280, 80],
+        ["current-galaxy-system-a", 3600, 0],
+        ["current-galaxy-system-a-mate", 3680, 80],
+        ["current-galaxy-system-b", 4800, 0],
+        ["current-galaxy-system-b-mate", 4880, 80],
+        ["next-target", 11000, 0],
+        ["next-neighbor", 11080, 80],
+        ["next-system-neighbor", 12200, 0],
+        ["next-system-neighbor-mate", 12280, 80],
+        ["next-galaxy-system-a", 14600, 0],
+        ["next-galaxy-system-a-mate", 14680, 80],
+        ["next-galaxy-system-b", 15800, 0],
+        ["next-galaxy-system-b-mate", 15880, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `shared-nav-${name}-${now}`,
+        display_name: name,
+        message: "Shared ancestry navigation probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.__sharedNavEvents = [];
+      document.addEventListener("animationstart", (event) => {
+        if (event.animationName === "cluster-coalesce"
+          && event.target.classList?.contains("map-cluster")
+          && document.querySelector("[data-mark-canvas]")?.dataset.clusterTransition === "explode") {
+          window.__sharedNavEvents.push(event.target.dataset.clusterLevel);
+        }
+      }, true);
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: [marks[0], marks[8]],
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.getByLabel("Fit whole world").click();
+    await page.locator("[data-recent-list]").getByRole("button", { name: /current-target/i }).click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "current-target", { timeout: 8000 });
+
+    const fitZoom = await page.locator("[data-mark-canvas]").evaluate(() => {
+      const canvasElement = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvasElement.getBoundingClientRect();
+      const style = getComputedStyle(world);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const padding = 36;
+      return Math.min(1, Math.max(1, rect.width - (padding * 2)) / worldWidth, Math.max(1, rect.height - (padding * 2)) / worldHeight);
+    });
+
+    await page.evaluate(() => {
+      window.__sharedNavEvents = [];
+      window.__sharedNavZoomSamples = [];
+      const world = document.querySelector("[data-canvas-world]");
+      const stopAt = performance.now() + 5200;
+      const sample = () => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+        window.__sharedNavZoomSamples.push(matrix.a);
+        if (performance.now() < stopAt) {
+          requestAnimationFrame(sample);
+        }
+      };
+      sample();
+    });
+    await page.locator("[data-recent-list]").getByRole("button", { name: /next-target/i }).click();
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "next-target", { timeout: 9000 });
+    const navState = await page.evaluate(() => ({
+      events: window.__sharedNavEvents,
+      minZoom: Math.min(...window.__sharedNavZoomSamples),
+    }));
+
+    expect(navState.events).toContain("system");
+    expect(navState.events).toContain("neighbor");
+    expect(navState.minZoom).toBeGreaterThan(fitZoom * 1.8);
   });
 
   test("exports the whole world as an SVG with all synced marks", async ({ page }) => {
