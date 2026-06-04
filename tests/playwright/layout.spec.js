@@ -291,6 +291,54 @@ test.describe("responsive app layout", () => {
     await expect(page.locator("[data-mark-popout]")).toBeVisible();
   });
 
+  test("selected mark popup adapts while zooming out", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["Solo Zoom", 0, 0],
+        ["Cluster Anchor", 5000, 0],
+        ["Cluster Mate", 5080, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `popup-zoom-${index}-${now}`,
+        display_name: name,
+        message: "Popup zoom probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index === 0 ? "#9fc5a8" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /solo zoom/i }).click();
+    await expect(page.locator("[data-mark-popout]")).toBeVisible();
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator("[data-mark-popout]")).toBeVisible();
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /cluster anchor/i }).click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Cluster Anchor", { timeout: 8000 });
+    await page.getByLabel("Fit whole world").click();
+
+    await expect(page.locator("[data-mark-popout]")).toBeHidden();
+    await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toBeVisible();
+  });
+
   test("supports bounded keyboard-modified pan and zoom controls", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
@@ -1391,6 +1439,57 @@ test.describe("responsive app layout", () => {
     expect(navState.events).toContain("system");
     expect(navState.events).toContain("neighbor");
     expect(navState.minZoom).toBeGreaterThan(fitZoom * 1.8);
+  });
+
+  test("recent mark traversal hides the full popup until the target is focused", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["popup-current", 0, 0],
+        ["popup-current-neighbor", 80, 80],
+        ["popup-current-system", 1200, 0],
+        ["popup-current-system-mate", 1280, 80],
+        ["popup-target", 3600, 0],
+        ["popup-target-neighbor", 3680, 80],
+        ["popup-target-system", 4800, 0],
+        ["popup-target-system-mate", 4880, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `popup-nav-${name}-${now}`,
+        display_name: name,
+        message: "Popup traversal probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: [marks[0], marks[4]],
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /popup-current/i }).click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "popup-current", { timeout: 8000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /popup-target/i }).click();
+    await expect.poll(async () => page.locator("[data-mark-popout]").evaluate((popout) => (
+      popout.hidden ? "hidden" : popout.dataset.state
+    ))).not.toBe("full");
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "popup-target", { timeout: 9000 });
+    await expect(page.locator("[data-mark-popout]")).toBeVisible();
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
   });
 
   test("exports the whole world as an SVG with all synced marks", async ({ page }) => {
