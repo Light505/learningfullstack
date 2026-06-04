@@ -526,6 +526,201 @@ test.describe("responsive app layout", () => {
     await expect(page.locator("[data-mark-popout]")).toBeHidden();
   });
 
+  test("compact locator appears for an offscreen clustered selected mark", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["Cluster Locator", 0, 0],
+        ["Cluster Locator Neighbor", 80, 80],
+        ["Cluster Locator System", 1200, 0],
+        ["Cluster Locator System Mate", 1280, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `cluster-locator-${index}-${now}`,
+        display_name: name,
+        message: "Clustered locator probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list] [data-recent-uid^='cluster-locator-0-']").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Cluster Locator", { timeout: 8000 });
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toBeVisible();
+    await expect(page.locator("[data-mark-popout]")).toBeHidden();
+
+    await page.evaluate(() => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const rect = canvas.getBoundingClientRect();
+      const minCoordinate = Number.parseFloat(canvas.dataset.minCoordinate || "-102400");
+      const zoom = 0.05;
+      const centerX = 50000;
+      const centerY = 50000;
+
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: {
+          zoom,
+          panX: (rect.width / 2) - ((centerX - minCoordinate) * zoom),
+          panY: (rect.height / 2) - ((centerY - minCoordinate) * zoom),
+          clamp: false,
+        },
+      }));
+    });
+
+    await expect(page.locator("[data-mark-popout]")).toBeVisible();
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-locator-target", "cluster");
+    const locatorPosition = await page.evaluate(() => {
+      const canvasRect = document.querySelector("[data-mark-canvas]").getBoundingClientRect();
+      const popoutRect = document.querySelector("[data-mark-popout]").getBoundingClientRect();
+      return {
+        edgeDelta: Math.min(
+          Math.abs(popoutRect.left - canvasRect.left),
+          Math.abs(popoutRect.right - canvasRect.right),
+          Math.abs(popoutRect.top - canvasRect.top),
+          Math.abs(popoutRect.bottom - canvasRect.bottom),
+        ),
+        width: popoutRect.width,
+      };
+    });
+    expect(locatorPosition.edgeDelta).toBeLessThan(12);
+    expect(locatorPosition.width).toBeLessThan(60);
+
+    await page.locator("[data-mark-popout]").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Cluster Locator", { timeout: 9000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+  });
+
+  test("clustered locator traverses back from a different cluster branch", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["Locator Current", 0, 0],
+        ["Locator Current Neighbor", 80, 80],
+        ["Locator Current System", 1200, 0],
+        ["Locator Current System Mate", 1280, 80],
+        ["Locator Current Galaxy A", 3600, 0],
+        ["Locator Current Galaxy A Mate", 3680, 80],
+        ["Locator Current Galaxy B", 4800, 0],
+        ["Locator Current Galaxy B Mate", 4880, 80],
+        ["Locator Other", 11000, 0],
+        ["Locator Other Neighbor", 11080, 80],
+        ["Locator Other System", 12200, 0],
+        ["Locator Other System Mate", 12280, 80],
+        ["Locator Other Galaxy A", 14600, 0],
+        ["Locator Other Galaxy A Mate", 14680, 80],
+        ["Locator Other Galaxy B", 15800, 0],
+        ["Locator Other Galaxy B Mate", 15880, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `branch-locator-${index}-${now}`,
+        display_name: name,
+        message: "Branch locator probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list] [data-recent-uid^='branch-locator-0-']").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Locator Current", { timeout: 8000 });
+
+    const fitZoom = await page.locator("[data-mark-canvas]").evaluate(() => {
+      const canvasElement = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvasElement.getBoundingClientRect();
+      const style = getComputedStyle(world);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const padding = 36;
+      return Math.min(1, Math.max(1, rect.width - (padding * 2)) / worldWidth, Math.max(1, rect.height - (padding * 2)) / worldHeight);
+    });
+
+    await page.evaluate(() => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const rect = canvas.getBoundingClientRect();
+      const minCoordinate = Number.parseFloat(canvas.dataset.minCoordinate || "-102400");
+      const zoom = 0.05;
+      const centerX = 15800;
+      const centerY = 0;
+
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: {
+          zoom,
+          panX: (rect.width / 2) - ((centerX - minCoordinate) * zoom),
+          panY: (rect.height / 2) - ((centerY - minCoordinate) * zoom),
+          clamp: false,
+        },
+      }));
+    });
+
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-locator-target", "cluster");
+
+    await page.evaluate(() => {
+      window.__branchLocatorZoomSamples = [];
+      const world = document.querySelector("[data-canvas-world]");
+      const stopAt = performance.now() + 5200;
+      const sample = () => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+        window.__branchLocatorZoomSamples.push(matrix.a);
+        if (performance.now() < stopAt) {
+          requestAnimationFrame(sample);
+        }
+      };
+      sample();
+    });
+    await page.locator("[data-mark-popout]").click();
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Locator Current", { timeout: 9000 });
+    await expect(page.locator(".mark-dot[data-selected='true']")).not.toHaveClass(/is-clustered/, { timeout: 9000 });
+    await expect.poll(async () => page.locator(".mark-dot[data-selected='true']").evaluate((mark) => {
+      const canvasRect = document.querySelector("[data-mark-canvas]").getBoundingClientRect();
+      const markRect = mark.getBoundingClientRect();
+      const centerX = markRect.left + (markRect.width / 2);
+      const centerY = markRect.top + (markRect.height / 2);
+
+      return centerX >= canvasRect.left
+        && centerX <= canvasRect.right
+        && centerY >= canvasRect.top
+        && centerY <= canvasRect.bottom;
+    })).toBe(true);
+    const minZoom = await page.evaluate(() => Math.min(...window.__branchLocatorZoomSamples));
+    expect(minZoom).toBeGreaterThan(fitZoom * 1.8);
+  });
+
   test("supports bounded keyboard-modified pan and zoom controls", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");

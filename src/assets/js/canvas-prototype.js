@@ -2067,29 +2067,24 @@ function positionMarkPopout() {
     }
 
     const rect = canvas.getBoundingClientRect();
-    const x = Number.parseFloat(selectedMark.dataset.x || "0");
-    const y = Number.parseFloat(selectedMark.dataset.y || "0");
-    const screenX = canvasView.panX + ((x - worldBounds.minX) * canvasView.zoom);
-    const screenY = canvasView.panY + ((y - worldBounds.minY) * canvasView.zoom);
+    const anchor = selectedMarkPopoutAnchor(selectedMark);
+    if (!anchor) {
+        return;
+    }
+
     const compact = markPopout.dataset.state === "compact";
     const xPadding = compact ? 18 : 170;
     const yMin = compact ? 18 : 132;
     const yMax = compact ? rect.height - 18 : rect.height - 18;
-    const clampedX = Math.max(xPadding, Math.min(rect.width - xPadding, screenX));
-    const clampedY = Math.max(yMin, Math.min(yMax, screenY));
+    const clampedX = Math.max(xPadding, Math.min(rect.width - xPadding, anchor.position.x));
+    const clampedY = Math.max(yMin, Math.min(yMax, anchor.position.y));
 
     markPopout.style.setProperty("--popout-x", `${(clampedX / rect.width) * 100}%`);
     markPopout.style.setProperty("--popout-y", `${(clampedY / rect.height) * 100}%`);
 }
 
-function selectedMarkScreenPosition(mark) {
-    if (!canvas || !mark) {
-        return null;
-    }
-
-    const x = Number.parseFloat(mark.dataset.x || "0");
-    const y = Number.parseFloat(mark.dataset.y || "0");
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+function screenPositionForCoordinate(x, y) {
+    if (!canvas || !Number.isFinite(x) || !Number.isFinite(y)) {
         return null;
     }
 
@@ -2099,8 +2094,17 @@ function selectedMarkScreenPosition(mark) {
     };
 }
 
-function selectedMarkIsInsideCanvasViewport(mark) {
-    const position = selectedMarkScreenPosition(mark);
+function selectedMarkScreenPosition(mark) {
+    if (!mark) {
+        return null;
+    }
+
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+    return screenPositionForCoordinate(x, y);
+}
+
+function positionIsInsideCanvasViewport(position) {
     if (!canvas || !position) {
         return false;
     }
@@ -2110,6 +2114,43 @@ function selectedMarkIsInsideCanvasViewport(mark) {
         && position.x <= rect.width
         && position.y >= 0
         && position.y <= rect.height;
+}
+
+function selectedMarkIsInsideCanvasViewport(mark) {
+    const position = selectedMarkScreenPosition(mark);
+    return positionIsInsideCanvasViewport(position);
+}
+
+function activeClusterForSelectedMark(mark) {
+    const uid = markUid(mark);
+    if (!uid) {
+        return null;
+    }
+
+    return currentClusters().find((cluster) => (
+        cluster.count > 1
+        && cluster.marks.some((clusterMark) => markUid(clusterMark) === uid)
+    )) || null;
+}
+
+function selectedMarkPopoutAnchor(mark) {
+    const cluster = mark.classList.contains("is-clustered")
+        ? activeClusterForSelectedMark(mark)
+        : null;
+
+    if (cluster) {
+        return {
+            target: "cluster",
+            cluster,
+            position: screenPositionForCoordinate(cluster.x, cluster.y),
+        };
+    }
+
+    return {
+        target: "mark",
+        cluster: null,
+        position: selectedMarkScreenPosition(mark),
+    };
 }
 
 function updateSelectedMarkPopout() {
@@ -2123,14 +2164,33 @@ function updateSelectedMarkPopout() {
         return;
     }
 
-    if (recentFocusPopupMode === "hidden" || selectedMark.classList.contains("is-clustered")) {
-        markPopout.hidden = true;
-        markPopout.dataset.state = "hidden";
+    if (recentFocusPopupMode === "hidden") {
+        hideMarkPopout();
+        return;
+    }
+
+    const anchor = selectedMarkPopoutAnchor(selectedMark);
+    if (!anchor || !anchor.position) {
+        hideMarkPopout();
+        return;
+    }
+
+    markPopout.dataset.locatorTarget = anchor.target;
+
+    if (anchor.target === "cluster") {
+        if (positionIsInsideCanvasViewport(anchor.position)) {
+            hideMarkPopout();
+            return;
+        }
+
+        markPopout.hidden = false;
+        markPopout.dataset.state = "compact";
+        positionMarkPopout();
         return;
     }
 
     markPopout.hidden = false;
-    if (!selectedMarkIsInsideCanvasViewport(selectedMark)
+    if (!positionIsInsideCanvasViewport(anchor.position)
         || canvasView.zoom < 0.72
         || recentFocusPopupMode === "compact") {
         markPopout.dataset.state = "compact";
@@ -2936,6 +2996,7 @@ function hideMarkPopout() {
     if (markPopout) {
         markPopout.hidden = true;
         markPopout.dataset.state = "hidden";
+        delete markPopout.dataset.locatorTarget;
     }
 }
 
