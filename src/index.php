@@ -13,7 +13,7 @@ $marks = [];
 
 try {
     $pdo = create_pdo($config);
-    $saved_marks = all_marks($pdo);
+    $saved_marks = all_marks($pdo, null, false);
 
     $marks = array_map(function (array $mark): array {
         return [
@@ -21,6 +21,7 @@ try {
             'name' => $mark['display_name'],
             'message' => $mark['message'] ?? 'A quiet mark without words.',
             'drawing' => $mark['drawing'] ?? '',
+            'drawing_loaded' => array_key_exists('drawing', $mark),
             'x' => (float) $mark['x_percent'],
             'y' => (float) $mark['y_percent'],
             'color' => $mark['color'],
@@ -37,6 +38,7 @@ try {
 $marks = array_map(function (array $mark, int $index): array {
     $mark['uid'] = $mark['uid'] ?? 'sample-' . ($index + 1);
     $mark['drawing'] = $mark['drawing'] ?? '';
+    $mark['drawing_loaded'] = $mark['drawing_loaded'] ?? true;
     return $mark;
 }, $marks, array_keys($marks));
 
@@ -220,6 +222,7 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                                     data-name="<?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-message="<?= htmlspecialchars($mark['message'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-drawing="<?= htmlspecialchars($mark['drawing'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-drawing-loaded="<?= $mark['drawing_loaded'] ? 'true' : 'false' ?>"
                                     data-created="<?= htmlspecialchars($mark['created'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-x="<?= htmlspecialchars((string) $mark['x'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-y="<?= htmlspecialchars((string) $mark['y'], ENT_QUOTES, 'UTF-8') ?>"

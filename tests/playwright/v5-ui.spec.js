@@ -99,7 +99,7 @@ test.describe("Version 5 mark UI", () => {
     await expect(entryCount).toHaveText(String(startingCount + 1));
     await expect(recentList).toContainText(displayName);
     await expect(recentList).toContainText(message);
-    await expect(page.locator(".mark-dot", { hasText: "" })).toHaveCount(startingCount + 1);
+    await expect(page.locator(`[data-uid][data-name="${displayName}"]`)).toHaveCount(1);
 
     const apiResponse = await page.request.get("http://localhost:8080/api/marks.php");
     expect(apiResponse.ok()).toBeTruthy();

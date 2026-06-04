@@ -297,11 +297,18 @@ function delete_mark_by_uid(PDO $pdo, string $uid): bool
     return $stmt->rowCount() > 0;
 }
 
-function recent_marks(PDO $pdo, int $limit = 10): array
+function mark_select_fields(bool $include_drawing): string
+{
+    $fields = 'uid, x_percent, y_percent, display_name, message, color, shape, created_at';
+
+    return $include_drawing ? $fields . ', drawing' : $fields;
+}
+
+function recent_marks(PDO $pdo, int $limit = 10, bool $include_drawing = true): array
 {
     $limit = max(1, min($limit, 50));
     $stmt = $pdo->prepare(
-        "SELECT uid, x_percent, y_percent, display_name, message, drawing, color, shape, created_at
+        'SELECT ' . mark_select_fields($include_drawing) . "
         FROM marks
         ORDER BY created_at DESC, id DESC
         LIMIT $limit"
@@ -311,14 +318,18 @@ function recent_marks(PDO $pdo, int $limit = 10): array
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-function mark_uids(PDO $pdo, int $limit = 1000): array
+function mark_uids(PDO $pdo, ?int $limit = 1000): array
 {
-    $limit = max(1, min($limit, 1000));
+    $limit_clause = '';
+    if ($limit !== null) {
+        $limit = max(1, $limit);
+        $limit_clause = " LIMIT $limit";
+    }
+
     $stmt = $pdo->prepare(
         "SELECT uid
         FROM marks
-        ORDER BY created_at ASC, id ASC
-        LIMIT $limit"
+        ORDER BY created_at ASC, id ASC" . $limit_clause
     );
     $stmt->execute();
 
@@ -339,14 +350,19 @@ function all_mark_coordinates(PDO $pdo): array
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-function all_marks(PDO $pdo, int $limit = 500): array
+function all_marks(PDO $pdo, ?int $limit = 500, bool $include_drawing = true): array
 {
-    $limit = max(1, min($limit, 1000));
+    $limit_clause = '';
+    if ($limit !== null) {
+        $limit = max(1, $limit);
+        $limit_clause = " LIMIT $limit";
+    }
+
     $stmt = $pdo->prepare(
-        "SELECT uid, x_percent, y_percent, display_name, message, drawing, color, shape, created_at
+        'SELECT ' . mark_select_fields($include_drawing) . "
         FROM marks
         ORDER BY created_at ASC, id ASC
-        LIMIT $limit"
+        $limit_clause"
     );
     $stmt->execute();
 

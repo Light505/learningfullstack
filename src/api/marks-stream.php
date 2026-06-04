@@ -32,9 +32,9 @@ try {
 
     for ($attempt = 0; $attempt < 30 && connection_status() === CONNECTION_NORMAL; $attempt += 1) {
         $count = count_marks($pdo);
-        $recent = recent_marks($pdo, 10);
-        $marks = all_marks($pdo);
-        $uids = mark_uids($pdo);
+        $recent = recent_marks($pdo, 10, false);
+        $marks = all_marks($pdo, null, false);
+        $uids = mark_uids($pdo, null);
         $signature = hash('sha256', json_encode([$count, $marks, $recent, $uids]));
 
         if ($signature !== $last_signature) {

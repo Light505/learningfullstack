@@ -76,18 +76,11 @@ test.describe("Version 7 drawing marks", () => {
     const previewDrawing = page.locator("[data-preview-drawing]");
     const undoButton = page.getByRole("button", { name: "Undo latest mark" });
     const startingCount = Number(await entryCount.textContent());
+    const displayName = `Sketch ${Date.now()}`;
 
-    await page.evaluate(() => {
-      const x = 90000 + Math.random() * 8000;
-      const y = 90000 + Math.random() * 8000;
-      document.querySelector("[data-x-field]").value = x.toFixed(2);
-      document.querySelector("[data-y-field]").value = y.toFixed(2);
-      const submitButton = document.querySelector("[data-submit-button]");
-      submitButton.disabled = false;
-      submitButton.textContent = "Place mark";
-    });
+    await page.getByRole("button", { name: /random/i }).click();
     await expect(submit).toBeEnabled();
-    await page.getByLabel("Display name").fill(`Sketch ${Date.now()}`);
+    await page.getByLabel("Display name").fill(displayName);
 
     await drawingCanvas.scrollIntoViewIfNeeded();
     const box = await drawingCanvas.boundingBox();
@@ -111,7 +104,14 @@ test.describe("Version 7 drawing marks", () => {
     const apiResponse = await page.request.get("http://localhost:8080/api/marks.php");
     expect(apiResponse.ok()).toBeTruthy();
     const apiPayload = await apiResponse.json();
-    expect(apiPayload.marks.some((mark) => mark.drawing && mark.display_name.startsWith("Sketch "))).toBe(true);
+    const syncedMark = apiPayload.marks.find((mark) => mark.display_name === displayName);
+    expect(syncedMark).toBeTruthy();
+    expect(syncedMark).not.toHaveProperty("drawing");
+
+    const hydratedResponse = await page.request.get(`http://localhost:8080/api/marks.php?uid=${encodeURIComponent(syncedMark.uid)}`);
+    expect(hydratedResponse.ok()).toBeTruthy();
+    const hydratedPayload = await hydratedResponse.json();
+    expect(hydratedPayload.mark.drawing).toBeTruthy();
 
     await Promise.all([
       page.waitForResponse((response) => response.url().includes("/api/marks.php") && response.request().method() === "POST"),

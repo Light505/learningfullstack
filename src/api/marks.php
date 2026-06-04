@@ -17,12 +17,26 @@ try {
     $pdo = create_pdo($config);
 
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
+        $uid = trim($_GET['uid'] ?? '');
+        if ($uid !== '') {
+            try {
+                echo json_encode([
+                    'ok' => true,
+                    'mark' => find_mark_by_uid($pdo, $uid),
+                ]);
+            } catch (RuntimeException $e) {
+                http_response_code(404);
+                echo json_encode(['ok' => false, 'error' => 'Mark not found.']);
+            }
+            exit;
+        }
+
         echo json_encode([
             'ok' => true,
             'count' => count_marks($pdo),
-            'marks' => all_marks($pdo),
-            'recent_marks' => recent_marks($pdo, 10),
-            'mark_uids' => mark_uids($pdo),
+            'marks' => all_marks($pdo, null, false),
+            'recent_marks' => recent_marks($pdo, 10, false),
+            'mark_uids' => mark_uids($pdo, null),
         ]);
         exit;
     }

@@ -216,6 +216,7 @@ let activeClusterExpansion = null;
 let recentFocusToken = 0;
 let recentFocusSequenceActive = false;
 const markPositions = new Map();
+const markDrawingRequests = new Map();
 const renderedTileElements = new Map();
 const renderedMarkUids = new Set();
 let canvasHintTimer = null;
@@ -789,17 +790,48 @@ function isPlaceableTile(tileX, tileY) {
 }
 
 function randomCoordinateInExploredTiles() {
-    const tileKeys = Array.from(exploredTiles).filter((key) => {
-        const [tileX, tileY] = key.split(",").map(Number);
-
-        return isTileInsideCoordinateBounds(tileX, tileY);
-    });
+    const tileKeys = placeableTileKeys();
     const [tileX, tileY] = tileKeys[Math.floor(Math.random() * tileKeys.length)].split(",").map(Number);
 
     return {
         x: (tileX * tileSize) + (Math.random() * tileSize),
         y: (tileY * tileSize) + (Math.random() * tileSize),
     };
+}
+
+function placeableTileKeys() {
+    return Array.from(exploredTiles).filter((key) => {
+        const [tileX, tileY] = key.split(",").map(Number);
+
+        return isTileInsideCoordinateBounds(tileX, tileY);
+    });
+}
+
+function matchesCurrentPlacement(x, y) {
+    return xField
+        && yField
+        && xField.value === x.toFixed(2)
+        && yField.value === y.toFixed(2);
+}
+
+function firstAvailableCoordinateInExploredTiles() {
+    const fractions = [0.2, 0.5, 0.8, 0.35, 0.65];
+    const tileKeys = placeableTileKeys().sort();
+
+    for (const key of tileKeys) {
+        const [tileX, tileY] = key.split(",").map(Number);
+        for (const xFraction of fractions) {
+            for (const yFraction of fractions) {
+                const x = (tileX * tileSize) + (xFraction * tileSize);
+                const y = (tileY * tileSize) + (yFraction * tileSize);
+                if (!tooCloseToExistingMarks(x, y) && !matchesCurrentPlacement(x, y)) {
+                    return { x, y };
+                }
+            }
+        }
+    }
+
+    return null;
 }
 
 function renderCanvasTiles() {
@@ -2535,11 +2567,8 @@ function resetCanvasView() {
 
     cancelCanvasViewAnimation();
     resetClusterDrilldown();
-    canvasView = {
-        zoom: 1,
-        panX: worldBounds.minX,
-        panY: worldBounds.minY,
-    };
+    const originTileCenter = tileCenterCoordinate(0, 0);
+    canvasView = centeredCanvasViewForCoordinate(originTileCenter.x, originTileCenter.y, 1);
     applyCanvasView();
     leaveFitWorldMode();
 }
@@ -2793,6 +2822,7 @@ function selectMark(mark, options = {}) {
         markPopout.hidden = options.showPopout === false;
         positionMarkPopout();
     }
+    ensureMarkDrawingLoaded(mark);
 }
 
 function setEmptyPreview() {
@@ -2966,11 +2996,14 @@ function formatCreatedAt(value) {
 }
 
 function apiMarkToView(mark) {
+    const hasDrawingPayload = Object.prototype.hasOwnProperty.call(mark, "drawing");
+
     return {
         uid: mark.uid,
         name: mark.display_name,
-        message: mark.message || (mark.drawing ? "A quiet sketch without words." : "A quiet mark without words."),
-        drawing: mark.drawing || "",
+        message: mark.message || (hasDrawingPayload && mark.drawing ? "A quiet sketch without words." : "A quiet mark without words."),
+        drawing: hasDrawingPayload ? (mark.drawing || "") : null,
+        drawingLoaded: hasDrawingPayload,
         x: Number.parseFloat(mark.x_percent),
         y: Number.parseFloat(mark.y_percent),
         color: mark.color,
@@ -2987,7 +3020,8 @@ function createMarkElement(mark) {
     button.dataset.uid = mark.uid;
     button.dataset.name = mark.name;
     button.dataset.message = mark.message;
-    button.dataset.drawing = mark.drawing;
+    button.dataset.drawing = mark.drawing || "";
+    button.dataset.drawingLoaded = mark.drawingLoaded ? "true" : "false";
     button.dataset.created = mark.created;
     button.dataset.x = String(mark.x);
     button.dataset.y = String(mark.y);
@@ -3051,7 +3085,12 @@ function addOrUpdateMark(mark, select = false, options = {}) {
         existing.className = `mark-dot ${mark.shape}`;
         existing.dataset.name = mark.name;
         existing.dataset.message = mark.message;
-        existing.dataset.drawing = mark.drawing;
+        if (mark.drawing !== null) {
+            existing.dataset.drawing = mark.drawing;
+            existing.dataset.drawingLoaded = "true";
+        } else if (!existing.dataset.drawingLoaded) {
+            existing.dataset.drawingLoaded = "false";
+        }
         existing.dataset.created = mark.created;
         existing.dataset.x = String(mark.x);
         existing.dataset.y = String(mark.y);
@@ -3142,6 +3181,52 @@ function drawingToPaths(drawing) {
     } catch (_error) {
         return [];
     }
+}
+
+async function ensureMarkDrawingLoaded(mark) {
+    if (!mark || mark.dataset.drawingLoaded === "true") {
+        return;
+    }
+
+    const uid = mark.dataset.uid || "";
+    if (uid === "") {
+        return;
+    }
+
+    if (markDrawingRequests.has(uid)) {
+        await markDrawingRequests.get(uid);
+        return;
+    }
+
+    const request = fetch(`/api/marks.php?uid=${encodeURIComponent(uid)}`, {
+        headers: { Accept: "application/json" },
+    })
+        .then(async (response) => {
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = await response.json();
+            if (!payload.ok || !payload.mark) {
+                return;
+            }
+
+            mark.dataset.drawing = payload.mark.drawing || "";
+            mark.dataset.drawingLoaded = "true";
+            if (mark.dataset.selected === "true") {
+                renderDrawingPreview(mark.dataset.drawing);
+                positionMarkPopout();
+            }
+        })
+        .catch(() => {
+            mark.dataset.drawingLoaded = "false";
+        })
+        .finally(() => {
+            markDrawingRequests.delete(uid);
+        });
+
+    markDrawingRequests.set(uid, request);
+    await request;
 }
 
 function renderDrawingPreview(drawing) {
@@ -3837,12 +3922,20 @@ if (canvas && xField && yField && placementNote) {
             for (let attempt = 0; attempt < 80; attempt += 1) {
                 const { x, y } = randomCoordinateInExploredTiles();
 
-                if (!tooCloseToExistingMarks(x, y)) {
+                if (!tooCloseToExistingMarks(x, y) && !matchesCurrentPlacement(x, y)) {
                     setPlacement(x, y);
                     focusCanvasOnCoordinate(x, y, 1.35);
                     placementNote.textContent = `Random spot: ${xField.value}px, ${yField.value}px`;
                     return;
                 }
+            }
+
+            const fallback = firstAvailableCoordinateInExploredTiles();
+            if (fallback) {
+                setPlacement(fallback.x, fallback.y);
+                focusCanvasOnCoordinate(fallback.x, fallback.y, 1.35);
+                placementNote.textContent = `Random spot: ${xField.value}px, ${yField.value}px`;
+                return;
             }
 
             placementNote.classList.add("error");
