@@ -75,16 +75,48 @@ const maxCanvasZoom = 2.4;
 const zoomStep = 0.2;
 const wheelZoomCooldown = 260;
 const zoomSnapTolerance = 0.001;
+const zoomStopDuplicateTolerance = zoomSnapTolerance * 1.5;
 const tileViewStopCounts = [3, 7, 13];
 const maxTileOverviewStopCount = 25;
 const worldViewStopFractions = [0.25, 0.5, 1];
-const clusterLevels = [
-    { key: "supercluster", label: "supercluster", radius: tileSize * 16, maxZoom: 0.02, padding: 120 },
-    { key: "galaxy", label: "galaxy cluster", radius: tileSize * 6, maxZoom: 0.08, padding: 108 },
-    { key: "system", label: "system cluster", radius: tileSize * 2, maxZoom: 0.25, padding: 96 },
-    { key: "neighbor", label: "neighbor cluster", radius: tileSize * 0.55, maxZoom: 1.15, padding: 84 },
-];
 const clusterVisualCollisionPx = 72;
+const clusterZoomFeelMultipliers = {
+    supercluster: 1.592,
+    galaxy: 1.536,
+    system: 1.422,
+    neighbor: 1.328,
+};
+
+function clusterZoomForRadius(radius, multiplier = 1) {
+    return Number(((clusterVisualCollisionPx / radius) * multiplier).toFixed(4));
+}
+
+const clusterLevels = [
+    { key: "supercluster", label: "supercluster", radius: tileSize * 16, padding: 120 },
+    { key: "galaxy", label: "galaxy cluster", radius: tileSize * 6, padding: 108 },
+    { key: "system", label: "system cluster", radius: tileSize * 2, padding: 96 },
+    { key: "neighbor", label: "neighbor cluster", radius: tileSize * 0.55, padding: 84 },
+].map((level) => ({
+    ...level,
+    maxZoom: clusterZoomForRadius(level.radius, clusterZoomFeelMultipliers[level.key]),
+}));
+const clusterZoomThresholds = {
+    supercluster: clusterLevels[0].maxZoom,
+    galaxy: clusterLevels[1].maxZoom,
+    system: clusterLevels[2].maxZoom,
+    neighbor: clusterLevels[3].maxZoom,
+};
+const clusterClickZoomMargin = 0.0008;
+const manualClusterOpenTiming = {
+    camera: 500,
+    settle: 380,
+};
+const recentClusterOpenTiming = {
+    world: 360,
+    camera: 320,
+    settle: 170,
+    finalFocus: 360,
+};
 const fullTileKeys = new Set();
 for (let tileX = minTileIndex; tileX <= maxTileIndex; tileX += 1) {
     for (let tileY = minTileIndex; tileY <= maxTileIndex; tileY += 1) {
@@ -172,15 +204,17 @@ let geometryDirty = true;
 let renderedTileSignature = "";
 let renderedFogSignature = "";
 let renderedClusterSignature = "";
-let previousClusterLevelIndex = -1;
+let committedClusterLevelIndex = null;
+let pendingClusterTransition = null;
 let previousMarkClusterCenter = new Map();
 let clusterCache = [];
 let clusterCacheSignature = "";
-let clusterDrilldown = null;
 let persistedClusters = [];
 let persistedClusterMemberships = [];
 let hasPersistedClusterPayload = false;
 let activeClusterExpansion = null;
+let recentFocusToken = 0;
+let recentFocusSequenceActive = false;
 const markPositions = new Map();
 const renderedTileElements = new Map();
 const renderedMarkUids = new Set();
@@ -494,9 +528,15 @@ function zoomSnapStopItems() {
     const overviewStops = overviewBoundaryZoom < singleTileZoom - zoomSnapTolerance
         ? [{ type: "overview", zoom: overviewBoundaryZoom }]
         : [];
+    const clusterStops = clusterLevels.map((level) => ({
+        type: "cluster",
+        level: level.key,
+        zoom: level.maxZoom,
+    }));
 
     return [
         { type: "detail", zoom: 1 },
+        ...clusterStops,
         { type: "tile", tileCount: 1, zoom: singleTileZoom },
         ...tileStops,
         ...overviewStops,
@@ -504,7 +544,7 @@ function zoomSnapStopItems() {
     ]
         .map((stop) => ({ ...stop, zoom: clampZoom(stop.zoom) }))
         .filter((stop) => stop.zoom >= fitZoom && stop.zoom <= maxCanvasZoom)
-        .filter((stop, index, stops) => stops.findIndex((item) => Math.abs(item.zoom - stop.zoom) < zoomSnapTolerance) === index)
+        .filter((stop, index, stops) => stops.findIndex((item) => Math.abs(item.zoom - stop.zoom) <= zoomStopDuplicateTolerance) === index)
         .sort((a, b) => b.zoom - a.zoom);
 }
 
@@ -926,14 +966,7 @@ function markClusterItems() {
 
 function markClusterItemsForDrilldown() {
     const items = markClusterItems();
-    const visible = items.filter((item) => isMarkInsideViewport(item.x, item.y));
-
-    if (!clusterDrilldown) {
-        return visible;
-    }
-
-    const allowedUids = new Set(clusterDrilldown.uids);
-    return visible.filter((item) => allowedUids.has(item.uid));
+    return items;
 }
 
 function viewportWorldBounds(margin = 0) {
@@ -1089,30 +1122,46 @@ function clusterMarksForRadius(items, radius) {
     return [...groups.values()].map((members) => makeClusterNode(members));
 }
 
+function clusterLevelIndexForZoom(zoom) {
+    const index = clusterLevels.findIndex((level) => zoom <= level.maxZoom);
+    return index === -1 ? clusterLevels.length : index;
+}
+
 function clusterLevelIndex() {
-    if (clusterDrilldown) {
-        return clusterDrilldown.levelIndex;
+    if (committedClusterLevelIndex === null) {
+        committedClusterLevelIndex = clusterLevelIndexForZoom(canvasView.zoom);
     }
 
-    const index = clusterLevels.findIndex((level) => canvasView.zoom <= level.maxZoom);
-    return index === -1 ? clusterLevels.length : index;
+    return committedClusterLevelIndex;
+}
+
+function commitClusterLevelForZoom(zoom, options = {}) {
+    const nextLevelIndex = clusterLevelIndexForZoom(zoom);
+    const previousLevelIndex = clusterLevelIndex();
+
+    if (nextLevelIndex === previousLevelIndex) {
+        return;
+    }
+
+    committedClusterLevelIndex = nextLevelIndex;
+    pendingClusterTransition = options.animate === false
+        ? null
+        : {
+            from: previousLevelIndex,
+            to: nextLevelIndex,
+            direction: nextLevelIndex < previousLevelIndex ? "out" : "in",
+        };
+    clusterCacheSignature = "";
+    renderedClusterSignature = "";
 }
 
 function activeClusterLevel() {
     return clusterLevels[clusterLevelIndex()] || null;
 }
 
-function clusterDrilldownKey() {
-    if (!clusterDrilldown) {
-        return "top";
-    }
-
-    return `${clusterDrilldown.levelIndex}:${clusterDrilldown.uids.join(",")}`;
-}
-
 function resetClusterDrilldown() {
-    clusterDrilldown = null;
     activeClusterExpansion = null;
+    pendingClusterTransition = null;
     renderedClusterSignature = "";
 }
 
@@ -1120,7 +1169,7 @@ function clusterSignature() {
     const marksKey = marks
         .map((mark) => `${mark.dataset.uid}:${mark.dataset.x}:${mark.dataset.y}:${mark.style.getPropertyValue("--mark-color")}`)
         .join("|");
-    return `${clusterLevelIndex()}|${clusterDrilldownKey()}|${marksKey}|${persistedClusterSignature()}`;
+    return `${clusterLevelIndex()}|${marksKey}|${persistedClusterSignature()}`;
 }
 
 function currentClusters() {
@@ -1130,7 +1179,7 @@ function currentClusters() {
         clusterCacheSignature = signature;
 
         const items = markClusterItemsForDrilldown();
-        const hierarchy = buildClusterHierarchy(items);
+        const hierarchy = buildFullClusterHierarchy(items);
 
         let result = null;
         for (let i = levelIndex; i < clusterLevels.length; i += 1) {
@@ -1145,7 +1194,7 @@ function currentClusters() {
     return clusterCache;
 }
 
-function buildClusterHierarchy(items) {
+function buildFullClusterHierarchy(items) {
     if (items.length === 0) {
         return [makeEmptyHierarchy(), makeEmptyHierarchy(), makeEmptyHierarchy(), makeEmptyHierarchy()];
     }
@@ -1153,58 +1202,58 @@ function buildClusterHierarchy(items) {
     const sorted = [...items].sort((a, b) => a.uid.localeCompare(b.uid));
 
     const neighbors = clusterMarksForRadius(sorted, clusterLevels[3].radius)
+        .filter((cluster) => cluster.count >= 2)
         .map((n) => ({ ...n, level: "neighbor" }));
 
-    const systemItems = neighbors.map((n) => ({
-        uid: n.id,
-        x: n.x,
-        y: n.y,
-        allMarks: n.marks,
-    }));
-    const systemGroups = groupItemsByRadius(systemItems, clusterLevels[2].radius);
-    const systems = systemGroups.map((group) => {
-        const allMarks = group.flatMap((m) => m.allMarks);
-        return { ...makeClusterNode(itemsFromMarkElements(allMarks)), level: "system", marks: allMarks };
-    });
+    const systemPromotion = promoteChildClusters(neighbors, clusterLevels[2]);
+    const galaxyPromotion = promoteChildClusters(systemPromotion.parents, clusterLevels[1]);
+    const superPromotion = promoteChildClusters(galaxyPromotion.parents, clusterLevels[0]);
 
-    const galaxyItems = systems.map((s) => ({
-        uid: s.id,
-        x: s.x,
-        y: s.y,
-        allMarks: s.marks,
-    }));
-    const galaxyGroups = groupItemsByRadius(galaxyItems, clusterLevels[1].radius);
-    const galaxies = galaxyGroups.map((group) => {
-        const allMarks = group.flatMap((m) => m.allMarks);
-        return { ...makeClusterNode(itemsFromMarkElements(allMarks)), level: "galaxy", marks: allMarks };
-    });
-
-    const superItems = galaxies.map((g) => ({
-        uid: g.id,
-        x: g.x,
-        y: g.y,
-        allMarks: g.marks,
-    }));
-    const superGroups = groupItemsByRadius(superItems, clusterLevels[0].radius);
-    const superclusters = superGroups.map((group) => {
-        const allMarks = group.flatMap((m) => m.allMarks);
-        return { ...makeClusterNode(itemsFromMarkElements(allMarks)), level: "supercluster", marks: allMarks };
-    });
-
-    if (superclusters.length === galaxies.length && galaxies.length > 0) {
-        return [[], galaxies, systems, neighbors];
-    }
-    if (galaxies.length === systems.length && systems.length > 0) {
-        return [superclusters, [], systems, neighbors];
-    }
-    if (systems.length === neighbors.length && neighbors.length > 0) {
-        return [superclusters, galaxies, [], neighbors];
-    }
-
-    return [superclusters, galaxies, systems, neighbors];
+    return [
+        [...superPromotion.parents, ...superPromotion.carried, ...galaxyPromotion.carried, ...systemPromotion.carried],
+        [...galaxyPromotion.parents, ...galaxyPromotion.carried, ...systemPromotion.carried],
+        [...systemPromotion.parents, ...systemPromotion.carried],
+        neighbors,
+    ];
 }
 
-function groupItemsByRadius(items, radius) {
+function promoteChildClusters(children, parentLevel) {
+    if (children.length === 0) {
+        return { parents: [], carried: [] };
+    }
+
+    const promotionItems = children.map((cluster) => ({
+        uid: cluster.id,
+        x: cluster.x,
+        y: cluster.y,
+        cluster,
+    }));
+    const groups = groupRawItemsByRadius(promotionItems, parentLevel.radius);
+    const parents = [];
+    const carried = [];
+
+    groups.forEach((group) => {
+        if (group.length < 2) {
+            carried.push(group[0].cluster);
+            return;
+        }
+
+        const allMarks = group.flatMap((item) => item.cluster.marks);
+        parents.push({
+            ...makeClusterNode(itemsFromMarkElements(allMarks)),
+            level: parentLevel.key,
+            marks: allMarks,
+        });
+    });
+
+    return { parents, carried };
+}
+
+function buildClusterHierarchy(items) {
+    return buildFullClusterHierarchy(items);
+}
+
+function groupRawItemsByRadius(items, radius) {
     const cell = radius || 1;
     const grid = new Map();
     const cellKey = (cx, cy) => `${cx},${cy}`;
@@ -1284,6 +1333,11 @@ function groupItemsByRadius(items, radius) {
     return [...groups.values()];
 }
 
+function groupItemsByRadius(items, radius) {
+    return groupRawItemsByRadius(items, radius)
+        .map((members) => makeClusterNode(members));
+}
+
 function itemsFromMarkElements(markElements) {
     return markElements
         .map((mark) => {
@@ -1304,6 +1358,15 @@ function makeEmptyHierarchy() {
 function clustersForLevelIndex(items, levelIndex) {
     const hierarchy = buildClusterHierarchy(items);
     return hierarchy[levelIndex] || items.map((item) => makeClusterNode([item], "mark"));
+}
+
+function structuralClustersForLevelIndex(items, levelIndex) {
+    if (levelIndex >= clusterLevels.length) {
+        return items.map((item) => makeClusterNode([item], "mark"));
+    }
+
+    const hierarchy = buildFullClusterHierarchy(items);
+    return hierarchy[levelIndex] || [];
 }
 
 function clusterItemsFromMarks(markElements) {
@@ -1408,21 +1471,21 @@ function persistedClustersForLevel(levelIndex, allowedUids = null, options = {})
 
 function explodedClusterChildren(cluster, currentLevelIndex) {
     const items = clusterItemsFromMarks(cluster.marks);
-    for (let levelIndex = currentLevelIndex + 1; levelIndex <= clusterLevels.length; levelIndex += 1) {
-        const children = clustersForLevelIndex(items, levelIndex);
-        const hasVisibleExplosion = children.length > 1
-            || children.some((child) => child.count === 1)
-            || levelIndex >= clusterLevels.length;
+    const nextLevelIndex = currentLevelIndex + 1;
 
-        if (hasVisibleExplosion) {
-            return { levelIndex, children };
-        }
+    if (nextLevelIndex >= clusterLevels.length) {
+        return {
+            levelIndex: clusterLevels.length,
+            children: structuralClustersForLevelIndex(items, clusterLevels.length),
+        };
     }
 
-    return {
-        levelIndex: clusterLevels.length,
-        children: clustersForLevelIndex(items, clusterLevels.length),
-    };
+    const children = structuralClustersForLevelIndex(items, nextLevelIndex);
+    if (children.length > 0) {
+        return { levelIndex: nextLevelIndex, children };
+    }
+
+    return explodedClusterChildren(cluster, nextLevelIndex);
 }
 
 function boundsForClusterChildren(children) {
@@ -1472,16 +1535,106 @@ function mapClusterColor(cluster) {
     return averageMarkColor(cluster.marks);
 }
 
-function startClusterExpansion(cluster, expandsToMarks) {
-    const currentLevelIdx = clusterLevelIndex();
-    const levelWeight = Math.max(0, currentLevelIdx);
-    const duration = 760 + (levelWeight * 70);
+function averagePreviousChildClusterCenter(cluster, previousCenters = previousMarkClusterCenter) {
+    const seen = new Set();
+    const centers = [];
+    cluster.marks.forEach((mark) => {
+        const center = previousCenters.get(mark.dataset.uid);
+        if (!center) {
+            return;
+        }
+        const key = `${center.x}:${center.y}`;
+        if (seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        centers.push(center);
+    });
+
+    if (centers.length === 0) {
+        return null;
+    }
+
+    return {
+        x: centers.reduce((total, center) => total + center.x, 0) / centers.length,
+        y: centers.reduce((total, center) => total + center.y, 0) / centers.length,
+    };
+}
+
+function structuralParentCenterForCluster(cluster, parentLevelIndex) {
+    if (parentLevelIndex < 0 || parentLevelIndex >= clusterLevels.length) {
+        return null;
+    }
+
+    const childUids = new Set(cluster.marks.map((mark) => mark.dataset.uid));
+    const parent = structuralClustersForLevelIndex(markClusterItems(), parentLevelIndex)
+        .find((candidate) => cluster.marks.every((mark) => (
+            candidate.level === clusterLevels[parentLevelIndex].key
+            &&
+            candidate.marks.some((candidateMark) => candidateMark.dataset.uid === mark.dataset.uid)
+        )));
+
+    if (!parent || !clusterContainsAnyUid(parent, childUids)) {
+        return null;
+    }
+
+    return { x: parent.x, y: parent.y };
+}
+
+function clusterContainsAnyUid(cluster, uidSet) {
+    if (!uidSet) {
+        return true;
+    }
+
+    return cluster.marks.some((mark) => uidSet.has(mark.dataset.uid));
+}
+
+function setClusterTransitionMode(mode, duration = 560) {
+    if (!canvas) {
+        return;
+    }
+
+    if (mode) {
+        canvas.dataset.clusterTransition = mode;
+        window.setTimeout(() => {
+            if (canvas.dataset.clusterTransition === mode) {
+                delete canvas.dataset.clusterTransition;
+            }
+        }, duration);
+        return;
+    }
+
+    delete canvas.dataset.clusterTransition;
+}
+
+function clearClusterTransitionMode(mode = null) {
+    if (!canvas) {
+        return;
+    }
+    if (mode === null || canvas.dataset.clusterTransition === mode) {
+        delete canvas.dataset.clusterTransition;
+    }
+}
+
+function clusterExpansionDuration(levelIndex) {
+    return 760 + (Math.max(0, levelIndex) * 70);
+}
+
+function startClusterExpansionState(cluster, levelIndex, duration = clusterExpansionDuration(levelIndex)) {
     activeClusterExpansion = {
         x: cluster.x,
         y: cluster.y,
-        strength: levelWeight,
+        strength: Math.max(0, levelIndex),
         until: performance.now() + duration,
+        uids: new Set(cluster.marks.map((mark) => mark.dataset.uid)),
     };
+}
+
+function startClusterExpansion(cluster, expandsToMarks) {
+    const currentLevelIdx = clusterLevelIndex();
+    const levelWeight = Math.max(0, currentLevelIdx);
+    const duration = clusterExpansionDuration(currentLevelIdx);
+    startClusterExpansionState(cluster, currentLevelIdx, duration);
 
     cluster.marks.forEach((mark) => {
         const x = Number.parseFloat(mark.dataset.x || "0");
@@ -1511,13 +1664,27 @@ function startClusterExpansion(cluster, expandsToMarks) {
     }, duration);
 }
 
-function zoomIntoCluster(cluster) {
-    if (!canvas || !cluster) {
-        return;
+function clusterLevelIndexForKey(key) {
+    return clusterLevels.findIndex((level) => level.key === key);
+}
+
+function clusterTargetZoomForLevel(levelIndex, fallbackZoom = canvasView.zoom) {
+    const level = clusterLevels[levelIndex];
+    if (level) {
+        return clampZoom(Math.max(fitWorldZoom(), level.maxZoom - clusterClickZoomMargin));
     }
 
-    const currentLevelIndex = clusterLevelIndex();
-    const currentLevel = activeClusterLevel();
+    return clampZoom(Math.max(1, fallbackZoom));
+}
+
+function zoomIntoCluster(cluster, options = {}) {
+    if (!canvas || !cluster) {
+        return Promise.resolve(null);
+    }
+
+    const currentLevelIndex = clusterLevelIndexForKey(cluster.level);
+    const effectiveCurrentLevelIndex = currentLevelIndex === -1 ? clusterLevelIndex() : currentLevelIndex;
+    const currentLevel = clusterLevels[effectiveCurrentLevelIndex] || activeClusterLevel();
     const explosion = explodedClusterChildren(cluster, currentLevelIndex);
     const nextLevel = clusterLevels[explosion.levelIndex] || null;
     const targetBounds = boundsForClusterChildren(explosion.children);
@@ -1526,67 +1693,57 @@ function zoomIntoCluster(cluster) {
     }
 
     const showsIndividualMarks = explosion.levelIndex >= clusterLevels.length;
+    const timing = options.timing || manualClusterOpenTiming;
+    const cameraDuration = timing.camera ?? manualClusterOpenTiming.camera;
+    const settleDuration = timing.settle ?? manualClusterOpenTiming.settle;
+    const animationDuration = Math.max(clusterExpansionDuration(currentLevelIndex), cameraDuration + settleDuration);
+    startClusterExpansionState(cluster, currentLevelIndex, animationDuration);
 
-    activeClusterExpansion = {
-        x: cluster.x,
-        y: cluster.y,
-        strength: Math.max(0, currentLevelIndex),
-        until: performance.now() + (760 + (Math.max(0, currentLevelIndex) * 70)),
-    };
-
-    clusterDrilldown = {
-        levelIndex: currentLevelIndex,
-        uids: cluster.marks.map((mark) => mark.dataset.uid).sort(),
-    };
-    clusterCacheSignature = "";
-    renderedClusterSignature = "";
-    canvas.classList.add("is-cluster-transition");
-
+    const opensNeighborToMarks = cluster.level === "neighbor" || explosion.levelIndex >= clusterLevels.length;
+    const targetZoom = opensNeighborToMarks
+        ? clampZoom(1.2)
+        : clusterTargetZoomForLevel(explosion.levelIndex, canvasView.zoom);
     const view = canvasViewForBounds(targetBounds, {
         padding: Math.max(nextLevel?.padding ?? currentLevel?.padding ?? 84, 128),
         minSpan: 1,
-        minZoom: canvasView.zoom,
-        maxZoom: maxCanvasZoom,
+        minZoom: 0,
+        maxZoom: targetZoom,
     });
     leaveFitWorldMode();
-    animateCanvasViewTo(view, 620, {
-        easing: easeInOutCubic,
-        onComplete: () => {
-            clusterDrilldown = {
-                levelIndex: explosion.levelIndex,
-                uids: cluster.marks.map((mark) => mark.dataset.uid).sort(),
-            };
-            clusterCacheSignature = "";
-            renderedClusterSignature = "";
-            renderMarksForViewport();
-            renderMapClusters();
 
-            if (showsIndividualMarks) {
-                cluster.marks.forEach((mark) => {
-                    const x = Number.parseFloat(mark.dataset.x || "0");
-                    const y = Number.parseFloat(mark.dataset.y || "0");
-                    mark.style.setProperty("--mark-expand-x", `${cluster.x - x}px`);
-                    mark.style.setProperty("--mark-expand-y", `${cluster.y - y}px`);
-                    mark.style.setProperty("--mark-expand-scale", "0.08");
-                    mark.dataset.expanding = "true";
-                });
-                window.setTimeout(() => {
+    return new Promise((resolve) => {
+        animateCanvasViewTo(view, cameraDuration, {
+            easing: easeInOutCubic,
+            onComplete: () => {
+                if (showsIndividualMarks) {
                     cluster.marks.forEach((mark) => {
-                        delete mark.dataset.expanding;
-                        mark.style.removeProperty("--mark-expand-x");
-                        mark.style.removeProperty("--mark-expand-y");
-                        mark.style.removeProperty("--mark-expand-scale");
+                        const x = Number.parseFloat(mark.dataset.x || "0");
+                        const y = Number.parseFloat(mark.dataset.y || "0");
+                        mark.style.setProperty("--mark-expand-x", `${cluster.x - x}px`);
+                        mark.style.setProperty("--mark-expand-y", `${cluster.y - y}px`);
+                        mark.style.setProperty("--mark-expand-scale", "0.08");
+                        mark.dataset.expanding = "true";
                     });
-                    activeClusterExpansion = null;
-                }, 540);
-            } else {
-                window.setTimeout(() => {
-                    activeClusterExpansion = null;
-                }, 540);
-            }
-
-            window.setTimeout(() => canvas.classList.remove("is-cluster-transition"), 220);
-        },
+                    window.setTimeout(() => {
+                        cluster.marks.forEach((mark) => {
+                            delete mark.dataset.expanding;
+                            mark.style.removeProperty("--mark-expand-x");
+                            mark.style.removeProperty("--mark-expand-y");
+                            mark.style.removeProperty("--mark-expand-scale");
+                        });
+                        activeClusterExpansion = null;
+                        clearClusterTransitionMode("explode");
+                        resolve({ cluster, explosion, view });
+                    }, settleDuration);
+                } else {
+                    window.setTimeout(() => {
+                        activeClusterExpansion = null;
+                        clearClusterTransitionMode("explode");
+                        resolve({ cluster, explosion, view });
+                    }, settleDuration);
+                }
+            },
+        });
     });
 }
 
@@ -1598,6 +1755,7 @@ function renderMapClusters() {
     const clusters = currentClusters();
     const level = activeClusterLevel();
     const bubbles = clusters.filter((cluster) => cluster.count > 1);
+    const previousClusterCenters = previousMarkClusterCenter;
 
     const coveredUids = new Set();
     const markClusterCenter = new Map();
@@ -1607,15 +1765,12 @@ function renderMapClusters() {
             markClusterCenter.set(mark.dataset.uid, { x: cluster.x, y: cluster.y });
         });
     });
-    const drilldownUids = clusterDrilldown ? new Set(clusterDrilldown.uids) : null;
-    const levelIndex = clusterLevelIndex();
-    const zoomingOut = levelIndex < previousClusterLevelIndex;
-    const zoomingIn = levelIndex > previousClusterLevelIndex;
-    const levelChanged = zoomingOut || zoomingIn;
+    const transition = pendingClusterTransition;
+    const zoomingOut = transition?.direction === "out";
+    const zoomingIn = transition?.direction === "in";
 
     marks.forEach((mark) => {
-        const outsideDrilldown = drilldownUids !== null && !drilldownUids.has(mark.dataset.uid);
-        const shouldCluster = coveredUids.has(mark.dataset.uid) || outsideDrilldown;
+        const shouldCluster = coveredUids.has(mark.dataset.uid);
         const wasClustered = mark.classList.contains("is-clustered");
 
         mark.classList.toggle("is-clustered", shouldCluster);
@@ -1655,15 +1810,29 @@ function renderMapClusters() {
         }
     });
 
-    previousClusterLevelIndex = levelIndex;
     previousMarkClusterCenter = markClusterCenter;
 
     const signature = `${clusterCacheSignature}:${worldBounds.minX}:${worldBounds.minY}`;
     if (signature === renderedClusterSignature) {
+        pendingClusterTransition = null;
         return;
     }
     renderedClusterSignature = signature;
+
+    const hasActiveExpansion = activeClusterExpansion && activeClusterExpansion.until > performance.now();
+    const transitionMode = zoomingOut
+        ? "coalesce"
+        : zoomingIn || hasActiveExpansion
+            ? "explode"
+            : null;
+
     mapClusters.innerHTML = "";
+    if (transitionMode) {
+        clearClusterTransitionMode();
+        setClusterTransitionMode(transitionMode, 560);
+    } else {
+        clearClusterTransitionMode();
+    }
 
     bubbles.forEach((cluster) => {
         const count = cluster.count;
@@ -1674,13 +1843,24 @@ function renderMapClusters() {
         const button = document.createElement("button");
 
         const levelWeight = Math.max(0, clusterLevels.findIndex((item) => item.key === buttonLevelKey));
-        const expanding = activeClusterExpansion && activeClusterExpansion.until > performance.now();
+        const expanding = activeClusterExpansion
+            && activeClusterExpansion.until > performance.now()
+            && clusterContainsAnyUid(cluster, activeClusterExpansion.uids);
+        const transitionFrom = zoomingOut || zoomingIn
+            ? averagePreviousChildClusterCenter(cluster, previousClusterCenters) || structuralParentCenterForCluster(cluster, transition?.from)
+            : null;
         const expandFrom = expanding
             ? {
                 x: activeClusterExpansion.x - cluster.x,
                 y: activeClusterExpansion.y - cluster.y,
                 strength: activeClusterExpansion.strength,
             }
+            : transitionFrom
+                ? {
+                    x: transitionFrom.x - cluster.x,
+                    y: transitionFrom.y - cluster.y,
+                    strength: levelWeight,
+                }
             : { x: 0, y: 0, strength: 0 };
 
         const levelClass = buttonLevelKey !== "marks" ? ` level-${buttonLevelKey}` : "";
@@ -1726,6 +1906,8 @@ function renderMapClusters() {
 
         mapClusters.appendChild(button);
     });
+
+    pendingClusterTransition = null;
 }
 
 function applyWorldGeometry() {
@@ -1896,6 +2078,9 @@ function applyCanvasView(options = {}) {
     if (!canvas) {
         return;
     }
+    if (!options.deferClusterCommit) {
+        commitClusterLevelForZoom(canvasView.zoom, { animate: options.animateClusterTransition !== false });
+    }
 
     applyWorldGeometry();
     if (geometryDirty) {
@@ -1974,11 +2159,12 @@ function overviewZoomStops() {
     const worldStops = worldViewStopFractions
         .filter((fraction) => fraction > 0.25)
         .map((fraction) => fitZoom / fraction);
+    const clusterStops = clusterLevels.map((level) => level.maxZoom);
 
-    return [...tileStops, overviewBoundaryZoom, ...worldStops]
+    return [...clusterStops, ...tileStops, overviewBoundaryZoom, ...worldStops]
         .map(clampZoom)
         .filter((zoom) => zoom >= fitZoom && zoom <= maxCanvasZoom)
-        .filter((zoom, index, stops) => stops.findIndex((item) => Math.abs(item - zoom) < 0.001) === index)
+        .filter((zoom, index, stops) => stops.findIndex((item) => Math.abs(item - zoom) <= zoomStopDuplicateTolerance) === index)
         .sort((a, b) => b - a);
 }
 
@@ -2132,7 +2318,8 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
 
     if (duration <= 0) {
         canvasView = nextView;
-        applyCanvasView(options);
+        commitClusterLevelForZoom(canvasView.zoom, { animate: options.animateClusterTransition !== false });
+        applyCanvasView({ ...options, deferClusterCommit: true });
         if (options.onComplete) {
             options.onComplete();
         }
@@ -2141,7 +2328,8 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
 
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         canvasView = nextView;
-        applyCanvasView(options);
+        commitClusterLevelForZoom(canvasView.zoom, { animate: options.animateClusterTransition !== false });
+        applyCanvasView({ ...options, deferClusterCommit: true });
         if (options.onComplete) {
             options.onComplete();
         }
@@ -2161,14 +2349,15 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
             panX: startView.panX + ((nextView.panX - startView.panX) * eased),
             panY: startView.panY + ((nextView.panY - startView.panY) * eased),
         };
-        applyCanvasView(options);
+        applyCanvasView({ ...options, deferClusterCommit: true });
 
         if (progress < 1) {
             viewAnimation = window.requestAnimationFrame(step);
         } else {
             viewAnimation = null;
             canvasView = nextView;
-            applyCanvasView(options);
+            commitClusterLevelForZoom(canvasView.zoom, { animate: options.animateClusterTransition !== false });
+            applyCanvasView({ ...options, deferClusterCommit: true });
             if (options.onComplete) {
                 options.onComplete();
             }
@@ -2204,7 +2393,7 @@ function settleCanvasView() {
     });
 }
 
-function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
+function focusCanvasOnCoordinate(x, y, targetZoom = 1.35, options = {}) {
     if (!canvas) {
         return;
     }
@@ -2217,7 +2406,7 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35) {
         zoom,
         panX: (rect.width / 2) - ((x - worldBounds.minX) * zoom),
         panY: (rect.height / 2) - ((y - worldBounds.minY) * zoom),
-    });
+    }, options.duration ?? 520);
     leaveFitWorldMode();
 }
 
@@ -2631,7 +2820,127 @@ function focusMark(mark, targetZoom = 1.35, options = {}) {
         Number.parseFloat(mark.dataset.x || "0"),
         Number.parseFloat(mark.dataset.y || "0"),
         targetZoom,
+        { duration: options.duration },
     );
+}
+
+function markUid(mark) {
+    return mark?.dataset?.uid || "";
+}
+
+function clusterPathForMark(mark) {
+    const uid = markUid(mark);
+    if (!uid) {
+        return [];
+    }
+
+    const hierarchy = buildFullClusterHierarchy(markClusterItems());
+    return clusterLevels
+        .map((level, levelIndex) => {
+            const cluster = (hierarchy[levelIndex] || []).find((item) => (
+                item.level === level.key
+                && item.count > 1
+                && item.marks.some((clusterMark) => markUid(clusterMark) === uid)
+            ));
+            return cluster ? { level, levelIndex, cluster } : null;
+        })
+        .filter(Boolean);
+}
+
+function worldOverviewView() {
+    const rect = canvas.getBoundingClientRect();
+    const worldWidth = worldBounds.maxX - worldBounds.minX;
+    const worldHeight = worldBounds.maxY - worldBounds.minY;
+    const zoom = fitWorldZoom();
+
+    return {
+        zoom,
+        panX: (rect.width - (worldWidth * zoom)) / 2,
+        panY: (rect.height - (worldHeight * zoom)) / 2,
+    };
+}
+
+function clusterCenterIsInsideViewport(cluster) {
+    const bounds = viewportWorldBounds(0);
+    if (!bounds) {
+        return true;
+    }
+
+    return cluster.x >= bounds.minX && cluster.x <= bounds.maxX
+        && cluster.y >= bounds.minY && cluster.y <= bounds.maxY;
+}
+
+function markIsVisibleAtIndividualZoom(mark) {
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+    const bounds = viewportWorldBounds(0);
+    if (!bounds || !Number.isFinite(x) || !Number.isFinite(y)) {
+        return false;
+    }
+
+    return canvasView.zoom > clusterZoomThresholds.neighbor + zoomSnapTolerance
+        && x >= bounds.minX && x <= bounds.maxX
+        && y >= bounds.minY && y <= bounds.maxY;
+}
+
+function recentClusterStartIndex(path) {
+    const currentLevelIndex = clusterLevelIndex();
+    const visibleIndex = path.findIndex(({ levelIndex, cluster }) => (
+        levelIndex >= currentLevelIndex
+        && canvasView.zoom <= clusterLevels[levelIndex].maxZoom + zoomSnapTolerance
+        && clusterCenterIsInsideViewport(cluster)
+    ));
+
+    return visibleIndex === -1 ? 0 : visibleIndex;
+}
+
+function focusRecentMarkThroughClusters(mark) {
+    if (!mark || !canvas) {
+        return;
+    }
+
+    mountMark(mark);
+
+    if (markIsVisibleAtIndividualZoom(mark)) {
+        focusMark(mark, 1.35);
+        return;
+    }
+
+    const path = clusterPathForMark(mark);
+    if (path.length === 0) {
+        focusMark(mark, 1.35);
+        return;
+    }
+
+    const token = recentFocusToken + 1;
+    recentFocusToken = token;
+    const startIndex = recentClusterStartIndex(path);
+
+    const animateStep = async (index) => {
+        if (recentFocusToken !== token) {
+            return;
+        }
+
+        if (index >= path.length) {
+            focusMark(mark, 1.35, { duration: recentClusterOpenTiming.finalFocus });
+            return;
+        }
+
+        await zoomIntoCluster(path[index].cluster, { timing: recentClusterOpenTiming });
+        animateStep(index + 1);
+    };
+
+    leaveFitWorldMode();
+    if (startIndex === 0 && path.length > 0) {
+        animateCanvasViewTo(worldOverviewView(), recentClusterOpenTiming.world, {
+            clamp: false,
+            easing: easeInOutCubic,
+            onComplete: () => animateStep(0),
+        });
+        return;
+    }
+
+    animateStep(startIndex);
 }
 
 function bindMark(mark) {
@@ -3600,7 +3909,7 @@ if (canvas && xField && yField && placementNote) {
 
             const mark = marks.find((item) => item.dataset.uid === button.dataset.recentUid);
             canvas?.scrollIntoView({ block: "center", behavior: "smooth" });
-            focusMark(mark);
+            focusRecentMarkThroughClusters(mark);
         });
     }
 
@@ -3610,7 +3919,7 @@ if (canvas && xField && yField && placementNote) {
             const mark = latestUid
                 ? marks.find((item) => item.dataset.uid === latestUid)
                 : marks[marks.length - 1];
-            focusMark(mark, 1.45);
+            focusRecentMarkThroughClusters(mark);
         });
     }
 
