@@ -336,7 +336,7 @@ test.describe("responsive app layout", () => {
 
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("test:setCanvasView", {
-        detail: { zoom: 1.2, panX: -103400, panY: -102000, clamp: false },
+        detail: { zoom: 1.2, panX: -160000, panY: -140000, clamp: false },
       }));
     });
     await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
@@ -355,24 +355,30 @@ test.describe("responsive app layout", () => {
     expect(compactPosition.edgeDelta).toBeLessThan(12);
     expect(compactPosition.width).toBeLessThan(60);
 
+    await page.evaluate(() => {
+      window.__compactReturnZoomSamples = [];
+      const world = document.querySelector("[data-canvas-world]");
+      const stopAt = performance.now() + 1000;
+      const sample = () => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+        window.__compactReturnZoomSamples.push(matrix.a);
+        if (performance.now() < stopAt) {
+          requestAnimationFrame(sample);
+        }
+      };
+      sample();
+    });
     await page.locator("[data-mark-popout]").click();
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Solo Zoom", { timeout: 8000 });
     await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
+    const compactReturnMinZoom = await page.evaluate(() => Math.min(...window.__compactReturnZoomSamples));
+    expect(compactReturnMinZoom).toBeGreaterThan(1);
 
     await page.getByLabel("Fit whole world").click();
     await expect(page.locator("[data-mark-popout]")).toBeVisible();
     await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
 
-    await page.evaluate(() => {
-      const canvas = document.querySelector("[data-mark-canvas]");
-      const rect = canvas.getBoundingClientRect();
-      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
-        detail: { zoom: 1, panX: (rect.width / 2) - 107400, panY: (rect.height / 2) - 102400, clamp: false },
-      }));
-    });
-    await page.evaluate(() => {
-      document.querySelector(".mark-dot[data-name='Cluster Anchor']").click();
-    });
+    await page.locator("[data-recent-list]").getByRole("button", { name: /cluster anchor/i }).click();
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Cluster Anchor", { timeout: 8000 });
     await page.evaluate(() => {
       const canvas = document.querySelector("[data-mark-canvas]");
@@ -395,6 +401,127 @@ test.describe("responsive app layout", () => {
 
     await expect(page.locator("[data-mark-popout]")).toBeHidden();
     await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toBeVisible();
+  });
+
+  test("compact locator returns clustered selected mark without zooming to world view", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["Clustered Return", 5000, 0],
+        ["Clustered Mate", 5900, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `compact-return-${index}-${now}`,
+        display_name: name,
+        message: "Compact return probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /clustered return/i }).click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Clustered Return", { timeout: 8000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
+    await page.waitForTimeout(700);
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: { zoom: 1.2, panX: -160000, panY: -140000, clamp: false },
+      }));
+    });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
+
+    const fitZoom = await page.locator("[data-mark-canvas]").evaluate(() => {
+      const canvasElement = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvasElement.getBoundingClientRect();
+      const style = getComputedStyle(world);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const padding = 36;
+      return Math.min(1, Math.max(1, rect.width - (padding * 2)) / worldWidth, Math.max(1, rect.height - (padding * 2)) / worldHeight);
+    });
+
+    await page.evaluate(() => {
+      window.__clusteredCompactReturnZoomSamples = [];
+      const world = document.querySelector("[data-canvas-world]");
+      const stopAt = performance.now() + 1200;
+      const sample = () => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+        window.__clusteredCompactReturnZoomSamples.push(matrix.a);
+        if (performance.now() < stopAt) {
+          requestAnimationFrame(sample);
+        }
+      };
+      sample();
+    });
+    await page.locator("[data-mark-popout]").click();
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Clustered Return", { timeout: 8000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+    const minZoom = await page.evaluate(() => Math.min(...window.__clusteredCompactReturnZoomSamples));
+    expect(minZoom).toBeGreaterThan(fitZoom * 1.8);
+  });
+
+  test("selected cluster indicator returns to the selected mark", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["Ring Return", 0, 0],
+        ["Ring Neighbor", 80, 80],
+        ["Ring System", 1200, 0],
+        ["Ring System Mate", 1280, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `ring-return-${index}-${now}`,
+        display_name: name,
+        message: "Selected cluster return probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /ring return/i }).click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Ring Return", { timeout: 8000 });
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator("[data-mark-popout]")).toBeHidden();
+    await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toBeVisible();
+
+    await page.locator(".map-cluster[data-selected-cluster='true']").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Ring Return", { timeout: 8000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
   });
 
   test("supports bounded keyboard-modified pan and zoom controls", async ({ page }) => {

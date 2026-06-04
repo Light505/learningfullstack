@@ -1999,6 +1999,10 @@ function renderMapClusters() {
 
         button.addEventListener("click", (event) => {
             event.stopPropagation();
+            if (button.dataset.selectedCluster === "true") {
+                focusSelectedMarkThroughClusters();
+                return;
+            }
             if (count === 1) {
                 focusMark(cluster.marks[0], 1.45);
                 return;
@@ -3026,6 +3030,98 @@ function clusterPathForMark(mark, hierarchy = null) {
         .filter(Boolean);
 }
 
+function clusterPathForCluster(cluster, hierarchy) {
+    if (!cluster || !hierarchy) {
+        return [];
+    }
+
+    const targetLevelIndex = clusterLevelIndexForKey(cluster.level);
+    if (targetLevelIndex === -1) {
+        return [];
+    }
+
+    const clusterUids = new Set(cluster.marks.map(markUid).filter(Boolean));
+    if (clusterUids.size === 0) {
+        return [];
+    }
+
+    return clusterLevels
+        .map((level, levelIndex) => {
+            if (levelIndex > targetLevelIndex) {
+                return null;
+            }
+
+            const levelClusters = hierarchy[levelIndex] || [];
+            const pathCluster = levelIndex === targetLevelIndex
+                ? levelClusters.find((item) => item.level === level.key && item.id === cluster.id)
+                : levelClusters.find((item) => (
+                    item.level === level.key
+                    && item.count > 1
+                    && [...clusterUids].every((uid) => item.marks.some((clusterMark) => markUid(clusterMark) === uid))
+                ));
+
+            return pathCluster ? { level, levelIndex, cluster: pathCluster } : null;
+        })
+        .filter(Boolean);
+}
+
+function clusterPathForCurrentViewport(hierarchy) {
+    if (!canvas || !hierarchy) {
+        return [];
+    }
+
+    const currentLevelIndex = clusterLevelIndex();
+    if (currentLevelIndex >= clusterLevels.length) {
+        return [];
+    }
+
+    const center = viewportCenterCoordinate();
+    const bounds = viewportWorldBounds(0);
+    const viewportClusters = [];
+
+    for (let levelIndex = currentLevelIndex; levelIndex < clusterLevels.length; levelIndex += 1) {
+        (hierarchy[levelIndex] || [])
+            .filter((cluster) => cluster.count > 1)
+            .forEach((cluster) => {
+                const distance = Math.hypot(center.x - cluster.x, center.y - cluster.y);
+                const centerVisible = !bounds
+                    || (cluster.x >= bounds.minX && cluster.x <= bounds.maxX
+                        && cluster.y >= bounds.minY && cluster.y <= bounds.maxY);
+                const markVisible = bounds && cluster.marks.some((mark) => {
+                    const x = Number.parseFloat(mark.dataset.x || "0");
+                    const y = Number.parseFloat(mark.dataset.y || "0");
+                    return Number.isFinite(x) && Number.isFinite(y)
+                        && x >= bounds.minX && x <= bounds.maxX
+                        && y >= bounds.minY && y <= bounds.maxY;
+                });
+
+                if (!centerVisible && !markVisible) {
+                    return;
+                }
+
+                viewportClusters.push({
+                    cluster,
+                    levelIndex,
+                    distance,
+                    visibleWeight: centerVisible ? 0 : 1,
+                });
+            });
+
+        if (viewportClusters.length > 0) {
+            break;
+        }
+    }
+
+    const currentCluster = viewportClusters.sort((a, b) => (
+        a.visibleWeight - b.visibleWeight
+        || a.distance - b.distance
+        || b.levelIndex - a.levelIndex
+        || a.cluster.id.localeCompare(b.cluster.id)
+    ))[0]?.cluster;
+
+    return clusterPathForCluster(currentCluster, hierarchy);
+}
+
 function worldOverviewView() {
     const rect = canvas.getBoundingClientRect();
     const worldWidth = worldBounds.maxX - worldBounds.minX;
@@ -3062,6 +3158,10 @@ function markIsVisibleAtIndividualZoom(mark) {
         && y >= bounds.minY && y <= bounds.maxY;
 }
 
+function selectedReturnDetailZoom() {
+    return clampZoom(Math.max(1.35, clusterZoomThresholds.neighbor + (zoomSnapTolerance * 2)));
+}
+
 function recentClusterStartIndex(path) {
     const currentLevelIndex = clusterLevelIndex();
     const visibleIndex = path.findIndex(({ levelIndex, cluster }) => (
@@ -3071,6 +3171,17 @@ function recentClusterStartIndex(path) {
     ));
 
     return visibleIndex === -1 ? 0 : visibleIndex;
+}
+
+function selectedReturnClusterStartIndex(path) {
+    const currentLevelIndex = clusterLevelIndex();
+    const zoomIndex = path.findIndex(({ levelIndex }) => levelIndex >= currentLevelIndex);
+
+    if (zoomIndex !== -1) {
+        return zoomIndex;
+    }
+
+    return Math.max(0, path.length - 1);
 }
 
 function selectedCanvasMark() {
@@ -3186,7 +3297,7 @@ async function runRecentClusterSequence(steps, mark, token, options = {}) {
     if (recentFocusToken === token) {
         recentFocusSequenceActive = false;
         recentFocusPopupMode = null;
-        focusMark(mark, 1.35, { duration: recentClusterOpenTiming.finalFocus });
+        focusMark(mark, options.finalZoom || 1.35, { duration: recentClusterOpenTiming.finalFocus });
         updateSelectedMarkPopout();
     }
 }
@@ -3255,11 +3366,53 @@ function focusRecentMarkThroughClusters(mark, options = {}) {
 
 function focusSelectedMarkThroughClusters() {
     const mark = selectedCanvasMark();
-    if (!mark) {
+    if (!mark || !canvas) {
         return;
     }
 
-    focusRecentMarkThroughClusters(mark, { hidePopupDuringTraversal: true });
+    mountMark(mark);
+    const token = recentFocusToken + 1;
+    recentFocusToken = token;
+    recentFocusPopupMode = "hidden";
+    updateSelectedMarkPopout();
+
+    if (canvasView.zoom > clusterZoomThresholds.neighbor + zoomSnapTolerance) {
+        recentFocusSequenceActive = false;
+        recentFocusPopupMode = null;
+        focusMark(mark, selectedReturnDetailZoom(), { duration: recentClusterOpenTiming.finalFocus });
+        updateSelectedMarkPopout();
+        return;
+    }
+
+    const hierarchy = buildFullClusterHierarchy(markClusterItems());
+    const targetPath = clusterPathForMark(mark, hierarchy);
+    if (targetPath.length === 0) {
+        recentFocusSequenceActive = false;
+        recentFocusPopupMode = null;
+        focusMark(mark, selectedReturnDetailZoom(), { duration: recentClusterOpenTiming.finalFocus });
+        updateSelectedMarkPopout();
+        return;
+    }
+
+    const viewportPath = clusterPathForCurrentViewport(hierarchy);
+    const sharedTraversal = sharedClusterTraversal(viewportPath, targetPath);
+    leaveFitWorldMode();
+
+    if (sharedTraversal) {
+        runRecentClusterSequence(sharedTraversal, mark, token, { hidePopupDuringTraversal: true, finalZoom: selectedReturnDetailZoom() });
+        return;
+    }
+
+    const startIndex = selectedReturnClusterStartIndex(targetPath);
+    runRecentClusterSequence(
+        targetPath.slice(startIndex).flatMap((entry) => [
+            { type: "overview", popupMode: "hidden", entry },
+            { type: "drilldown", popupMode: "hidden", entry },
+        ]),
+        mark,
+        token,
+        { hidePopupDuringTraversal: true, finalZoom: selectedReturnDetailZoom() },
+    );
 }
 
 function bindMark(mark) {
