@@ -243,6 +243,14 @@ function isTouchDevice() {
     return "ontouchstart" in window || navigator.maxTouchPoints > 0;
 }
 
+function closestElement(target, selector) {
+    if (target?.closest) {
+        return target.closest(selector);
+    }
+
+    return target?.parentElement?.closest(selector) || null;
+}
+
 const inputConfig = {
     panThreshold: 3,
     clickThreshold: 3,
@@ -2063,11 +2071,45 @@ function positionMarkPopout() {
     const y = Number.parseFloat(selectedMark.dataset.y || "0");
     const screenX = canvasView.panX + ((x - worldBounds.minX) * canvasView.zoom);
     const screenY = canvasView.panY + ((y - worldBounds.minY) * canvasView.zoom);
-    const clampedX = Math.max(170, Math.min(rect.width - 170, screenX));
-    const clampedY = Math.max(132, Math.min(rect.height - 18, screenY));
+    const compact = markPopout.dataset.state === "compact";
+    const xPadding = compact ? 18 : 170;
+    const yMin = compact ? 18 : 132;
+    const yMax = compact ? rect.height - 18 : rect.height - 18;
+    const clampedX = Math.max(xPadding, Math.min(rect.width - xPadding, screenX));
+    const clampedY = Math.max(yMin, Math.min(yMax, screenY));
 
     markPopout.style.setProperty("--popout-x", `${(clampedX / rect.width) * 100}%`);
     markPopout.style.setProperty("--popout-y", `${(clampedY / rect.height) * 100}%`);
+}
+
+function selectedMarkScreenPosition(mark) {
+    if (!canvas || !mark) {
+        return null;
+    }
+
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+    }
+
+    return {
+        x: canvasView.panX + ((x - worldBounds.minX) * canvasView.zoom),
+        y: canvasView.panY + ((y - worldBounds.minY) * canvasView.zoom),
+    };
+}
+
+function selectedMarkIsInsideCanvasViewport(mark) {
+    const position = selectedMarkScreenPosition(mark);
+    if (!canvas || !position) {
+        return false;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    return position.x >= 0
+        && position.x <= rect.width
+        && position.y >= 0
+        && position.y <= rect.height;
 }
 
 function updateSelectedMarkPopout() {
@@ -2088,7 +2130,9 @@ function updateSelectedMarkPopout() {
     }
 
     markPopout.hidden = false;
-    if (canvasView.zoom < 0.72 || recentFocusPopupMode === "compact") {
+    if (!selectedMarkIsInsideCanvasViewport(selectedMark)
+        || canvasView.zoom < 0.72
+        || recentFocusPopupMode === "compact") {
         markPopout.dataset.state = "compact";
     } else {
         markPopout.dataset.state = "full";
@@ -2526,7 +2570,7 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35, options = {}) {
         zoom,
         panX: (rect.width / 2) - ((x - worldBounds.minX) * zoom),
         panY: (rect.height / 2) - ((y - worldBounds.minY) * zoom),
-    }, options.duration ?? 520);
+    }, options.duration ?? 520, { onComplete: options.onComplete });
     leaveFitWorldMode();
 }
 
@@ -2903,6 +2947,8 @@ function selectMark(mark, options = {}) {
     markPreview?.classList.remove("is-empty");
 
     previewChip.style.background = getComputedStyle(mark).getPropertyValue("--mark-color");
+    previewChip.classList.toggle("square", mark.classList.contains("square"));
+    previewChip.classList.toggle("diamond", mark.classList.contains("diamond"));
     previewName.textContent = mark.dataset.name;
     previewMessage.textContent = mark.dataset.message;
     renderDrawingPreview(mark.dataset.drawing || "");
@@ -2926,6 +2972,7 @@ function setEmptyPreview() {
         previewDrawing.hidden = true;
     }
     previewCreated.textContent = "Waiting for the first mark.";
+    previewChip.classList.remove("square", "diamond");
 }
 
 function focusMark(mark, targetZoom = 1.35, options = {}) {
@@ -2939,12 +2986,25 @@ function focusMark(mark, targetZoom = 1.35, options = {}) {
         Number.parseFloat(mark.dataset.x || "0"),
         Number.parseFloat(mark.dataset.y || "0"),
         targetZoom,
-        { duration: options.duration },
+        {
+            duration: options.duration,
+            onComplete: options.onComplete || updateSelectedMarkPopout,
+        },
     );
 }
 
 function markUid(mark) {
     return mark?.dataset?.uid || "";
+}
+
+function markByUid(uid) {
+    return marks.find((item) => item.dataset.uid === uid) || null;
+}
+
+function focusMarkByUid(uid, markView = null) {
+    const mark = markByUid(uid) || (markView ? addOrUpdateMark(markView, false) : null);
+    canvas?.scrollIntoView({ block: "center", behavior: "smooth" });
+    focusRecentMarkThroughClusters(mark);
 }
 
 function clusterPathForMark(mark, hierarchy = null) {
@@ -3104,7 +3164,7 @@ function animateWorldOverview(options = {}) {
     });
 }
 
-async function runRecentClusterSequence(steps, mark, token) {
+async function runRecentClusterSequence(steps, mark, token, options = {}) {
     recentFocusSequenceActive = true;
     for (const step of steps) {
         if (recentFocusToken !== token) {
@@ -3114,7 +3174,7 @@ async function runRecentClusterSequence(steps, mark, token) {
             return;
         }
 
-        recentFocusPopupMode = step.popupMode === "hidden" ? "hidden" : null;
+        recentFocusPopupMode = options.hidePopupDuringTraversal || step.popupMode === "hidden" ? "hidden" : null;
         updateSelectedMarkPopout();
         if (step.type === "overview") {
             await animateClusterOverview(step.entry.cluster, { timing: recentClusterOpenTiming });
@@ -3131,7 +3191,7 @@ async function runRecentClusterSequence(steps, mark, token) {
     }
 }
 
-function focusRecentMarkThroughClusters(mark) {
+function focusRecentMarkThroughClusters(mark, options = {}) {
     if (!mark || !canvas) {
         return;
     }
@@ -3139,10 +3199,12 @@ function focusRecentMarkThroughClusters(mark) {
     mountMark(mark);
     const token = recentFocusToken + 1;
     recentFocusToken = token;
-    recentFocusPopupMode = null;
+    recentFocusPopupMode = options.hidePopupDuringTraversal ? "hidden" : null;
+    updateSelectedMarkPopout();
 
     if (markIsVisibleAtIndividualZoom(mark)) {
         recentFocusSequenceActive = false;
+        recentFocusPopupMode = null;
         focusMark(mark, 1.35);
         updateSelectedMarkPopout();
         return;
@@ -3152,6 +3214,7 @@ function focusRecentMarkThroughClusters(mark) {
     const path = clusterPathForMark(mark, hierarchy);
     if (path.length === 0) {
         recentFocusSequenceActive = false;
+        recentFocusPopupMode = null;
         focusMark(mark, 1.35);
         updateSelectedMarkPopout();
         return;
@@ -3163,7 +3226,7 @@ function focusRecentMarkThroughClusters(mark) {
         const sharedTraversal = sharedClusterTraversal(currentPath, path);
         if (sharedTraversal) {
             leaveFitWorldMode();
-            runRecentClusterSequence(sharedTraversal, mark, token);
+            runRecentClusterSequence(sharedTraversal, mark, token, options);
             return;
         }
     }
@@ -3173,7 +3236,12 @@ function focusRecentMarkThroughClusters(mark) {
     leaveFitWorldMode();
     if (startIndex === 0 && path.length > 0) {
         animateWorldOverview({ timing: recentClusterOpenTiming })
-            .then(() => runRecentClusterSequence(path.map((entry) => ({ type: "drilldown", popupMode: "hidden", entry })), mark, token));
+            .then(() => runRecentClusterSequence(
+                path.map((entry) => ({ type: "drilldown", popupMode: "hidden", entry })),
+                mark,
+                token,
+                options,
+            ));
         return;
     }
 
@@ -3181,7 +3249,17 @@ function focusRecentMarkThroughClusters(mark) {
         path.slice(startIndex).map((entry) => ({ type: "drilldown", popupMode: "hidden", entry })),
         mark,
         token,
+        options,
     );
+}
+
+function focusSelectedMarkThroughClusters() {
+    const mark = selectedCanvasMark();
+    if (!mark) {
+        return;
+    }
+
+    focusRecentMarkThroughClusters(mark, { hidePopupDuringTraversal: true });
 }
 
 function bindMark(mark) {
@@ -3537,6 +3615,12 @@ function renderRecent(markItems) {
         button.type = "button";
         button.className = "recent-mark-button";
         button.dataset.recentUid = mark.uid;
+        const activateRecentMark = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            focusMarkByUid(mark.uid, mark);
+        };
+        button.addEventListener("click", activateRecentMark);
         dot.className = `recent-dot ${mark.shape}`;
         dot.style.setProperty("--mark-color", mark.color);
         name.textContent = mark.name;
@@ -4206,24 +4290,23 @@ if (canvas && xField && yField && placementNote) {
 
     if (recentList) {
         recentList.addEventListener("click", (event) => {
-            const button = event.target.closest("[data-recent-uid]");
+            const button = closestElement(event.target, "[data-recent-uid]");
             if (!button) {
                 return;
             }
 
-            const mark = marks.find((item) => item.dataset.uid === button.dataset.recentUid);
-            canvas?.scrollIntoView({ block: "center", behavior: "smooth" });
-            focusRecentMarkThroughClusters(mark);
+            focusMarkByUid(button.dataset.recentUid);
         });
     }
 
     if (focusLatestButton) {
         focusLatestButton.addEventListener("click", () => {
             const latestUid = recentList?.querySelector("[data-recent-uid]")?.dataset.recentUid;
-            const mark = latestUid
-                ? marks.find((item) => item.dataset.uid === latestUid)
-                : marks[marks.length - 1];
-            focusRecentMarkThroughClusters(mark);
+            if (latestUid) {
+                focusMarkByUid(latestUid);
+                return;
+            }
+            focusRecentMarkThroughClusters(marks[marks.length - 1]);
         });
     }
 
@@ -4418,6 +4501,18 @@ if (undoButton && formStatus) {
     });
 }
 
+if (markPopout) {
+    markPopout.addEventListener("click", (event) => {
+        if (markPopout.dataset.state !== "compact") {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        focusSelectedMarkThroughClusters();
+    });
+}
+
 document.addEventListener("click", (event) => {
     if (!markPopout || markPopout.hidden) {
         return;
@@ -4428,7 +4523,7 @@ document.addEventListener("click", (event) => {
         return;
     }
 
-    if (event.target.closest("[data-mark-popout]") || event.target.closest(".mark-dot") || event.target.closest("[data-recent-uid]")) {
+    if (closestElement(event.target, "[data-mark-popout]") || closestElement(event.target, ".mark-dot") || closestElement(event.target, "[data-recent-uid]")) {
         return;
     }
 

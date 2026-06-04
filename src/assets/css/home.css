@@ -916,33 +916,39 @@ textarea:disabled {
 }
 
 .mark-popout[data-state="compact"] {
-    grid-template-columns: 30px minmax(0, auto);
-    gap: 8px;
-    width: max-content;
-    max-width: min(220px, calc(100% - 28px));
-    padding: 8px 10px;
-    box-shadow: 0 10px 24px rgba(41, 32, 24, 0.24);
-    transform: translate(-50%, calc(-100% - 12px)) scale(0.86);
-    transform-origin: 50% 100%;
+    display: grid;
+    grid-template-columns: 34px;
+    place-items: center;
+    width: 46px;
+    max-width: none;
+    padding: 6px;
+    border-color: rgba(255, 248, 235, 0.74);
+    background: transparent;
+    box-shadow: none;
+    cursor: pointer;
+    transform: translate(-50%, -50%);
+    transform-origin: 50% 50%;
+    backdrop-filter: none;
+}
+
+.mark-popout[data-state="compact"]::after {
+    content: none;
 }
 
 .mark-popout[data-state="compact"] .preview-chip {
-    width: 28px;
-    height: 28px;
-}
-
-.mark-popout[data-state="compact"] h2 {
+    width: 30px;
+    height: 30px;
     margin: 0;
-    max-width: 150px;
-    overflow: hidden;
-    font-size: 0.9rem;
-    line-height: 1.1;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    box-shadow:
+        0 0 0 5px rgba(255, 248, 235, 0.32),
+        0 0 0 11px rgba(245, 158, 11, 0.24),
+        0 8px 18px rgba(41, 32, 24, 0.26);
 }
 
+.mark-popout[data-state="compact"] h2,
 .mark-popout[data-state="compact"] p,
 .mark-popout[data-state="compact"] small,
+.mark-popout[data-state="compact"] .mark-popout-body,
 .mark-popout[data-state="compact"] .preview-drawing {
     display: none;
 }
@@ -1695,6 +1701,15 @@ textarea {
     .mark-canvas[data-cluster-transition] .map-cluster.is-multi::after {
         animation: none;
     }
+}
+
+.preview-chip.square {
+    border-radius: 5px;
+}
+
+.preview-chip.diamond {
+    border-radius: 4px;
+    transform: rotate(45deg);
 }
 
 @media (max-width: 920px) {

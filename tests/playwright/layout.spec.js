@@ -324,16 +324,74 @@ test.describe("responsive app layout", () => {
       }));
     });
 
-    await page.locator("[data-recent-list]").getByRole("button", { name: /solo zoom/i }).click();
+    await page.evaluate(() => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const rect = canvas.getBoundingClientRect();
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: { zoom: 1, panX: (rect.width / 2) - 102400, panY: (rect.height / 2) - 102400, clamp: false },
+      }));
+    });
+    await page.locator(".mark-dot[data-name='Solo Zoom']").click();
     await expect(page.locator("[data-mark-popout]")).toBeVisible();
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: { zoom: 1.2, panX: -103400, panY: -102000, clamp: false },
+      }));
+    });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
+    await expect(page.locator("[data-mark-popout] h2")).toBeHidden();
+    const compactPosition = await page.evaluate(() => {
+      const canvasRect = document.querySelector("[data-mark-canvas]").getBoundingClientRect();
+      const popoutRect = document.querySelector("[data-mark-popout]").getBoundingClientRect();
+      return {
+        edgeDelta: Math.min(
+          Math.abs(popoutRect.left - canvasRect.left),
+          Math.abs(popoutRect.right - canvasRect.right),
+        ),
+        width: popoutRect.width,
+      };
+    });
+    expect(compactPosition.edgeDelta).toBeLessThan(12);
+    expect(compactPosition.width).toBeLessThan(60);
+
+    await page.locator("[data-mark-popout]").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Solo Zoom", { timeout: 8000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
 
     await page.getByLabel("Fit whole world").click();
     await expect(page.locator("[data-mark-popout]")).toBeVisible();
     await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact");
 
-    await page.locator("[data-recent-list]").getByRole("button", { name: /cluster anchor/i }).click();
+    await page.evaluate(() => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const rect = canvas.getBoundingClientRect();
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: { zoom: 1, panX: (rect.width / 2) - 107400, panY: (rect.height / 2) - 102400, clamp: false },
+      }));
+    });
+    await page.evaluate(() => {
+      document.querySelector(".mark-dot[data-name='Cluster Anchor']").click();
+    });
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Cluster Anchor", { timeout: 8000 });
-    await page.getByLabel("Fit whole world").click();
+    await page.evaluate(() => {
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvas.getBoundingClientRect();
+      const style = getComputedStyle(world);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const padding = 36;
+      const zoom = Math.min(1, Math.max(1, rect.width - (padding * 2)) / worldWidth, Math.max(1, rect.height - (padding * 2)) / worldHeight);
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: {
+          zoom,
+          panX: (rect.width - (worldWidth * zoom)) / 2,
+          panY: (rect.height - (worldHeight * zoom)) / 2,
+          clamp: false,
+        },
+      }));
+    });
 
     await expect(page.locator("[data-mark-popout]")).toBeHidden();
     await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toBeVisible();
