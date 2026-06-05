@@ -1,6 +1,7 @@
 {
   "scripts": {
     "benchmark:canvas": "node scripts/benchmark-canvas.js",
+    "benchmark:canvas:deep": "node scripts/benchmark-canvas-deep.js",
     "test:playwright:v5": "playwright test tests/playwright/v5-ui.spec.js --reporter=list",
     "test:playwright:v7": "playwright test tests/playwright/v7-drawing.spec.js --reporter=list",
     "test:playwright:layout": "playwright test tests/playwright/layout.spec.js --reporter=list",
