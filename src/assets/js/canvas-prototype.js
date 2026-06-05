@@ -2751,15 +2751,23 @@ function focusCanvasOnCoordinate(x, y, targetZoom = 1.35, options = {}) {
     }
 
     resetClusterDrilldown();
-    const rect = canvas.getBoundingClientRect();
     const zoom = clampZoom(Math.max(1, targetZoom));
-
-    animateCanvasViewTo({
-        zoom,
-        panX: (rect.width / 2) - ((x - worldBounds.minX) * zoom),
-        panY: (rect.height / 2) - ((y - worldBounds.minY) * zoom),
-    }, options.duration ?? 520, { onComplete: options.onComplete });
+    animateCanvasViewTo(centeredCanvasViewForCoordinate(x, y, zoom), options.duration ?? 520, { onComplete: options.onComplete });
     leaveFitWorldMode();
+}
+
+function focusedCanvasViewForMark(mark, targetZoom = 1.35) {
+    if (!mark) {
+        return null;
+    }
+
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+    }
+
+    return centeredCanvasViewForCoordinate(x, y, clampZoom(Math.max(1, targetZoom)));
 }
 
 function canvasViewForBounds(bounds, options = {}) {
@@ -3347,6 +3355,14 @@ function markIsVisibleAtIndividualZoom(mark) {
         && y >= bounds.minY && y <= bounds.maxY;
 }
 
+function markIsAlreadyFocused(mark, targetZoom = 1.35) {
+    const focusedView = focusedCanvasViewForMark(mark, targetZoom);
+    return selectedCanvasMark() === mark
+        && markIsVisibleAtIndividualZoom(mark)
+        && focusedView !== null
+        && canvasViewsMatch(canvasView, focusedView);
+}
+
 function selectedReturnDetailZoom() {
     return clampZoom(Math.max(1.35, clusterZoomThresholds.neighbor + (zoomSnapTolerance * 2)));
 }
@@ -3576,6 +3592,14 @@ function focusRecentMarkThroughClusters(mark, options = {}) {
         return;
     }
 
+    const currentMark = selectedCanvasMark();
+    if (currentMark === mark && markIsAlreadyFocused(mark, options.finalZoom || 1.35)) {
+        recentFocusSequenceActive = false;
+        recentFocusPopupMode = null;
+        updateSelectedMarkPopout();
+        return;
+    }
+
     mountMark(mark);
     const token = recentFocusToken + 1;
     recentFocusToken = token;
@@ -3585,7 +3609,6 @@ function focusRecentMarkThroughClusters(mark, options = {}) {
     const hierarchy = buildFullClusterHierarchy(markClusterItems());
     const path = clusterPathForMark(mark, hierarchy);
 
-    const currentMark = selectedCanvasMark();
     if (currentMark && currentMark !== mark) {
         const currentPath = clusterPathForMark(currentMark, hierarchy);
         const sharedTraversal = recentSharedClusterTraversal(currentPath, path);

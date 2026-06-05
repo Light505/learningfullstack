@@ -1976,6 +1976,145 @@ test.describe("responsive app layout", () => {
     await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
   });
 
+  test("same focused recent mark does not replay traversal", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const mark = {
+        uid: `same-recent-${Date.now()}`,
+        display_name: "Same Recent",
+        message: "Do not replay when focused.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#86a6c9",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: 1,
+          marks: [mark],
+          recent_marks: [mark],
+          mark_uids: [mark.uid],
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list] [data-recent-uid^='same-recent-']").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Same Recent", { timeout: 9000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+    await expect.poll(async () => page.locator("[data-canvas-world]").evaluate((world) => (
+      new DOMMatrixReadOnly(getComputedStyle(world).transform).a
+    ))).toBeCloseTo(1.35, 2);
+
+    const beforeView = await page.locator("[data-canvas-world]").evaluate((world) => {
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+      return { zoom: matrix.a, panX: matrix.m41, panY: matrix.m42 };
+    });
+    await page.evaluate(() => {
+      window.__sameRecentZoomSamples = [];
+      const world = document.querySelector("[data-canvas-world]");
+      const stopAt = performance.now() + 1000;
+      const sample = () => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+        window.__sameRecentZoomSamples.push(matrix.a);
+        if (performance.now() < stopAt) {
+          requestAnimationFrame(sample);
+        }
+      };
+      sample();
+    });
+    await page.locator("[data-recent-list] [data-recent-uid^='same-recent-']").click();
+    await page.waitForTimeout(1050);
+
+    const afterState = await page.locator("[data-canvas-world]").evaluate((world) => {
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+      return {
+        zoom: matrix.a,
+        panX: matrix.m41,
+        panY: matrix.m42,
+        minZoom: Math.min(...window.__sameRecentZoomSamples),
+        maxZoom: Math.max(...window.__sameRecentZoomSamples),
+      };
+    });
+
+    expect(afterState.zoom).toBeCloseTo(beforeView.zoom, 2);
+    expect(afterState.panX).toBeCloseTo(beforeView.panX, 1);
+    expect(afterState.panY).toBeCloseTo(beforeView.panY, 1);
+    expect(afterState.minZoom).toBeGreaterThan(beforeView.zoom - 0.01);
+    expect(afterState.maxZoom).toBeLessThan(beforeView.zoom + 0.01);
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Same Recent");
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full");
+  });
+
+  test("same recent mark traverses again after camera moves away", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const mark = {
+        uid: `same-recent-away-${Date.now()}`,
+        display_name: "Same Recent Away",
+        message: "Replay after moving away.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: 1,
+          marks: [mark],
+          recent_marks: [mark],
+          mark_uids: [mark.uid],
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list] [data-recent-uid^='same-recent-away-']").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Same Recent Away", { timeout: 9000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+
+    const fitZoom = await page.locator("[data-mark-canvas]").evaluate(() => {
+      const canvasElement = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvasElement.getBoundingClientRect();
+      const style = getComputedStyle(world);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const padding = 36;
+      return Math.min(1, Math.max(1, rect.width - (padding * 2)) / worldWidth, Math.max(1, rect.height - (padding * 2)) / worldHeight);
+    });
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: { zoom: 1.2, panX: -160000, panY: -140000, clamp: false },
+      }));
+      window.__sameRecentAwayZoomSamples = [];
+      const world = document.querySelector("[data-canvas-world]");
+      const stopAt = performance.now() + 4200;
+      const sample = () => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+        window.__sameRecentAwayZoomSamples.push(matrix.a);
+        if (performance.now() < stopAt) {
+          requestAnimationFrame(sample);
+        }
+      };
+      sample();
+    });
+
+    await page.locator("[data-recent-list] [data-recent-uid^='same-recent-away-']").click();
+    await page.waitForTimeout(4300);
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+    const minZoom = await page.evaluate(() => Math.min(...window.__sameRecentAwayZoomSamples));
+    expect(minZoom).toBeLessThanOrEqual(fitZoom * 1.25);
+  });
+
   test("recent partial cluster path continues with synthetic mark traversal", async ({ page }) => {
     await isolateCanvasData(page);
     await page.goto("http://localhost:8080/");
