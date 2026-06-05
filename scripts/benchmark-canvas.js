@@ -358,6 +358,9 @@ async function runBenchmark(options) {
     const fitFrames = page.evaluate((durationMs) => window.__canvasBenchSampleFrames("fitWorld", durationMs), options.fitSampleMs);
     await page.getByLabel("Fit whole world").click();
     await fitFrames;
+    await page.waitForFunction(() => (
+      document.querySelectorAll('.mark-dot[data-coalescing="true"], .mark-dot[data-expanding="true"]').length === 0
+    ), null, { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(100);
     const afterFitWorld = await getCanvasState(page);
 

@@ -128,6 +128,7 @@ const maxDetailedTileRenderCount = 400;
 const tileRenderBuffer = 2;
 const tileUnloadBuffer = 3;
 const markRenderBuffer = 2;
+const largeMarkDomThreshold = 1000;
 
 function snapGridDivisionForZoom(zoom) {
     if (zoom >= 0.9) return 1;
@@ -204,6 +205,7 @@ let geometryDirty = true;
 let renderedTileSignature = "";
 let renderedFogSignature = "";
 let renderedClusterSignature = "";
+let renderedMarkClusterStateSignature = "";
 let committedClusterLevelIndex = null;
 let pendingClusterTransition = null;
 let previousMarkClusterCenter = new Map();
@@ -216,10 +218,21 @@ let activeClusterExpansion = null;
 let recentFocusToken = 0;
 let recentFocusSequenceActive = false;
 let recentFocusPopupMode = null;
+let selectedMarkElement = null;
 const markPositions = new Map();
 const markDrawingRequests = new Map();
 const renderedTileElements = new Map();
 const renderedMarkUids = new Set();
+let marksVersion = 0;
+let exploredTilesVersion = 0;
+let clusterDataVersion = 0;
+let worldGeometryVersion = 0;
+let deferredMarkRenderRefresh = null;
+let coalescingCleanupTimer = null;
+let expandingCleanupTimer = null;
+let clusteredMarkCount = 0;
+const coalescingCleanupMarks = new Set();
+const expandingCleanupMarks = new Set();
 let canvasHintTimer = null;
 const markPreview = document.querySelector(".mark-preview");
 let panMomentum = { velocityX: 0, velocityY: 0, lastX: 0, lastY: 0, lastTime: 0 };
@@ -614,13 +627,42 @@ function canvasViewsMatch(firstView, secondView) {
         && Math.abs(firstView.panY - secondView.panY) < 0.5;
 }
 
+function invalidateClusterState() {
+    clusterCacheSignature = "";
+    renderedClusterSignature = "";
+    renderedMarkClusterStateSignature = "";
+}
+
+function markCollectionChanged() {
+    marksVersion += 1;
+    invalidateClusterState();
+}
+
+function addExploredTile(key) {
+    if (exploredTiles.has(key)) {
+        return false;
+    }
+
+    exploredTiles.add(key);
+    exploredTilesVersion += 1;
+    return true;
+}
+
 function updateWorldBounds() {
+    const previousBounds = worldBounds;
     worldBounds = {
         minX: minTileIndex * tileSize,
         maxX: (maxTileIndex + 1) * tileSize,
         minY: minTileIndex * tileSize,
         maxY: (maxTileIndex + 1) * tileSize,
     };
+
+    if (previousBounds.minX !== worldBounds.minX
+        || previousBounds.maxX !== worldBounds.maxX
+        || previousBounds.minY !== worldBounds.minY
+        || previousBounds.maxY !== worldBounds.maxY) {
+        worldGeometryVersion += 1;
+    }
 }
 
 function revealTileAndNeighbors(tileX, tileY) {
@@ -629,7 +671,7 @@ function revealTileAndNeighbors(tileX, tileY) {
             const nx = tileX + dx;
             const ny = tileY + dy;
             if (nx >= minTileIndex && nx <= maxTileIndex && ny >= minTileIndex && ny <= maxTileIndex) {
-                exploredTiles.add(`${nx},${ny}`);
+                addExploredTile(`${nx},${ny}`);
             }
         }
     }
@@ -640,7 +682,7 @@ function revealExploredNeighbors(tileX, tileY) {
 }
 
 function commitTile(tileX, tileY) {
-    exploredTiles.add(`${tileX},${tileY}`);
+    addExploredTile(`${tileX},${tileY}`);
 }
 
 function commitTileBandForCoordinate(x, y) {
@@ -866,10 +908,11 @@ function renderCanvasTiles() {
 
     const tileSignature = [
         useViewportCulling ? "viewport" : "overview",
-        Array.from(exploredTiles).sort().join("|"),
+        exploredTilesVersion,
         renderTileKeys.join("|"),
         worldBounds.minX,
         worldBounds.minY,
+        worldGeometryVersion,
     ].join("::");
     if (tileSignature === renderedTileSignature) {
         return;
@@ -915,14 +958,14 @@ function renderFogCanvas(renderMode) {
 
     const worldWidth = worldBounds.maxX - worldBounds.minX;
     const worldHeight = worldBounds.maxY - worldBounds.minY;
-    const exploredSignature = Array.from(exploredTiles).sort().join("|");
     const signature = [
         renderMode,
         worldBounds.minX,
         worldBounds.minY,
         worldWidth,
         worldHeight,
-        exploredSignature,
+        exploredTilesVersion,
+        worldGeometryVersion,
     ].join("::");
     if (signature === renderedFogSignature) {
         return;
@@ -1192,8 +1235,7 @@ function commitClusterLevelForZoom(zoom, options = {}) {
             to: nextLevelIndex,
             direction: nextLevelIndex < previousLevelIndex ? "out" : "in",
         };
-    clusterCacheSignature = "";
-    renderedClusterSignature = "";
+    invalidateClusterState();
 }
 
 function activeClusterLevel() {
@@ -1204,13 +1246,11 @@ function resetClusterDrilldown() {
     activeClusterExpansion = null;
     pendingClusterTransition = null;
     renderedClusterSignature = "";
+    renderedMarkClusterStateSignature = "";
 }
 
 function clusterSignature() {
-    const marksKey = marks
-        .map((mark) => `${mark.dataset.uid}:${mark.dataset.x}:${mark.dataset.y}:${mark.style.getPropertyValue("--mark-color")}`)
-        .join("|");
-    return `${clusterLevelIndex()}|${marksKey}|${persistedClusterSignature()}`;
+    return `${clusterLevelIndex()}|${marksVersion}|${clusterDataVersion}`;
 }
 
 function currentClusters() {
@@ -1758,6 +1798,7 @@ function startClusterExpansion(cluster, expandsToMarks) {
             mark.style.removeProperty("--mark-expand-y");
             mark.style.removeProperty("--mark-expand-scale");
         });
+        scheduleMarkRenderRefresh();
     }, duration);
 }
 
@@ -1828,6 +1869,7 @@ function zoomIntoCluster(cluster, options = {}) {
                             mark.style.removeProperty("--mark-expand-y");
                             mark.style.removeProperty("--mark-expand-scale");
                         });
+                        scheduleMarkRenderRefresh();
                         activeClusterExpansion = null;
                         clearClusterTransitionMode("explode");
                         resolve({ cluster, explosion, view });
@@ -1854,70 +1896,71 @@ function renderMapClusters() {
     const bubbles = clusters.filter((cluster) => cluster.count > 1);
     const previousClusterCenters = previousMarkClusterCenter;
     const selectedUid = selectedCanvasMark()?.dataset.uid || "";
-
-    const coveredUids = new Set();
-    const markClusterCenter = new Map();
-    bubbles.forEach((cluster) => {
-        cluster.marks.forEach((mark) => {
-            coveredUids.add(mark.dataset.uid);
-            markClusterCenter.set(mark.dataset.uid, { x: cluster.x, y: cluster.y });
-        });
-    });
     const transition = pendingClusterTransition;
     const zoomingOut = transition?.direction === "out";
     const zoomingIn = transition?.direction === "in";
+    const clusterStateSignature = `${clusterCacheSignature}:${worldBounds.minX}:${worldBounds.minY}`;
+    const shouldUpdateMarkClusterState = Boolean(transition)
+        || clusterStateSignature !== renderedMarkClusterStateSignature;
 
-    marks.forEach((mark) => {
-        const shouldCluster = coveredUids.has(mark.dataset.uid);
-        const wasClustered = mark.classList.contains("is-clustered");
+    if (shouldUpdateMarkClusterState) {
+        const coveredUids = new Set();
+        const markClusterCenter = new Map();
+        bubbles.forEach((cluster) => {
+            cluster.marks.forEach((mark) => {
+                coveredUids.add(mark.dataset.uid);
+                markClusterCenter.set(mark.dataset.uid, { x: cluster.x, y: cluster.y });
+            });
+        });
+        clusteredMarkCount = coveredUids.size;
 
-        mark.classList.toggle("is-clustered", shouldCluster);
+        marks.forEach((mark) => {
+            const shouldCluster = coveredUids.has(mark.dataset.uid);
+            const wasClustered = mark.classList.contains("is-clustered");
 
-        if (shouldCluster && (!wasClustered || zoomingOut)) {
-            const center = markClusterCenter.get(mark.dataset.uid);
-            if (center) {
-                const mx = Number.parseFloat(mark.dataset.x || "0");
-                const my = Number.parseFloat(mark.dataset.y || "0");
-                mark.style.setProperty("--coalesce-x", `${center.x - mx}px`);
-                mark.style.setProperty("--coalesce-y", `${center.y - my}px`);
+            mark.classList.toggle("is-clustered", shouldCluster);
+
+            if (shouldCluster && (!wasClustered || zoomingOut)) {
+                const center = markClusterCenter.get(mark.dataset.uid);
+                if (center) {
+                    const mx = Number.parseFloat(mark.dataset.x || "0");
+                    const my = Number.parseFloat(mark.dataset.y || "0");
+                    mark.style.setProperty("--coalesce-x", `${center.x - mx}px`);
+                    mark.style.setProperty("--coalesce-y", `${center.y - my}px`);
+                }
+                mark.dataset.coalescing = "true";
+                scheduleCoalescingCleanup(mark);
             }
-            mark.dataset.coalescing = "true";
-            window.setTimeout(() => {
-                delete mark.dataset.coalescing;
-                mark.style.removeProperty("--coalesce-x");
-                mark.style.removeProperty("--coalesce-y");
-            }, 400);
-        }
 
-        if (!shouldCluster && (wasClustered || zoomingIn)) {
-            const oldCenter = previousMarkClusterCenter.get(mark.dataset.uid);
-            if (oldCenter) {
-                const mx = Number.parseFloat(mark.dataset.x || "0");
-                const my = Number.parseFloat(mark.dataset.y || "0");
-                mark.style.setProperty("--mark-expand-x", `${oldCenter.x - mx}px`);
-                mark.style.setProperty("--mark-expand-y", `${oldCenter.y - my}px`);
-                mark.style.setProperty("--mark-expand-scale", "0.08");
+            if (!shouldCluster && (wasClustered || zoomingIn)) {
+                const oldCenter = previousMarkClusterCenter.get(mark.dataset.uid);
+                if (oldCenter) {
+                    const mx = Number.parseFloat(mark.dataset.x || "0");
+                    const my = Number.parseFloat(mark.dataset.y || "0");
+                    mark.style.setProperty("--mark-expand-x", `${oldCenter.x - mx}px`);
+                    mark.style.setProperty("--mark-expand-y", `${oldCenter.y - my}px`);
+                    mark.style.setProperty("--mark-expand-scale", "0.08");
+                }
+                mark.dataset.expanding = "true";
+                scheduleExpandingCleanup(mark);
             }
-            mark.dataset.expanding = "true";
-            window.setTimeout(() => {
-                delete mark.dataset.expanding;
-                mark.style.removeProperty("--mark-expand-x");
-                mark.style.removeProperty("--mark-expand-y");
-                mark.style.removeProperty("--mark-expand-scale");
-            }, 540);
-        }
-    });
+        });
 
-    previousMarkClusterCenter = markClusterCenter;
+        previousMarkClusterCenter = markClusterCenter;
+        renderedMarkClusterStateSignature = clusterStateSignature;
+    }
 
-    const signature = `${clusterCacheSignature}:${worldBounds.minX}:${worldBounds.minY}`;
+    const hasActiveExpansion = activeClusterExpansion && activeClusterExpansion.until > performance.now();
+    const activeExpansionSignature = hasActiveExpansion
+        ? `${activeClusterExpansion.x}:${activeClusterExpansion.y}:${activeClusterExpansion.strength}:${activeClusterExpansion.until}`
+        : "";
+    const signature = `${clusterStateSignature}:${selectedUid}:${activeExpansionSignature}`;
     if (signature === renderedClusterSignature) {
         pendingClusterTransition = null;
         return;
     }
     renderedClusterSignature = signature;
 
-    const hasActiveExpansion = activeClusterExpansion && activeClusterExpansion.until > performance.now();
     const transitionMode = zoomingOut
         ? "coalesce"
         : zoomingIn || hasActiveExpansion
@@ -2250,18 +2293,103 @@ function unmountMark(mark) {
     }
 }
 
-function renderMarksForViewport() {
+function scheduleMarkRenderRefresh() {
+    if (deferredMarkRenderRefresh !== null) {
+        return;
+    }
+
+    deferredMarkRenderRefresh = window.setTimeout(() => {
+        deferredMarkRenderRefresh = null;
+        renderMarksForViewport();
+    }, 0);
+}
+
+function scheduleCoalescingCleanup(mark) {
+    coalescingCleanupMarks.add(mark);
+    if (coalescingCleanupTimer !== null) {
+        return;
+    }
+
+    coalescingCleanupTimer = window.setTimeout(() => {
+        coalescingCleanupTimer = null;
+        coalescingCleanupMarks.forEach((item) => {
+            delete item.dataset.coalescing;
+            item.style.removeProperty("--coalesce-x");
+            item.style.removeProperty("--coalesce-y");
+        });
+        coalescingCleanupMarks.clear();
+        scheduleMarkRenderRefresh();
+    }, 400);
+}
+
+function scheduleExpandingCleanup(mark) {
+    expandingCleanupMarks.add(mark);
+    if (expandingCleanupTimer !== null) {
+        return;
+    }
+
+    expandingCleanupTimer = window.setTimeout(() => {
+        expandingCleanupTimer = null;
+        expandingCleanupMarks.forEach((item) => {
+            delete item.dataset.expanding;
+            item.style.removeProperty("--mark-expand-x");
+            item.style.removeProperty("--mark-expand-y");
+            item.style.removeProperty("--mark-expand-scale");
+        });
+        expandingCleanupMarks.clear();
+        scheduleMarkRenderRefresh();
+    }, 540);
+}
+
+function markIsAnimating(mark) {
+    return mark.dataset.expanding === "true"
+        || mark.dataset.coalescing === "true"
+        || mark.classList.contains("is-undoing");
+}
+
+function shouldSuppressClusteredMarkDom(mark, renderMode, selectedMark) {
+    return marks.length > largeMarkDomThreshold
+        && renderMode !== "detail"
+        && mark !== selectedMark
+        && !markIsAnimating(mark)
+        && mark.classList.contains("is-clustered");
+}
+
+function largeClusteredMapHasNoVisibleMarkDom(selectedMark, renderMode) {
+    return marks.length > largeMarkDomThreshold
+        && renderMode !== "detail"
+        && !selectedMark
+        && clusteredMarkCount >= marks.length
+        && coalescingCleanupTimer === null
+        && expandingCleanupTimer === null
+        && coalescingCleanupMarks.size === 0
+        && expandingCleanupMarks.size === 0;
+}
+
+function renderMarksForViewport(renderMode = canvas?.dataset.renderMode || "detail") {
     if (!canvas || !canvasWorld) {
         return;
     }
 
     const bounds = bufferedWorldBounds(visibleWorldBounds(), markRenderBuffer);
-    const selectedMark = marks.find((mark) => mark.dataset.selected === "true");
+    const selectedMark = selectedCanvasMark();
     const fragment = document.createDocumentFragment();
     const nextRenderedMarkUids = new Set();
 
+    if (largeClusteredMapHasNoVisibleMarkDom(selectedMark, renderMode)) {
+        if (renderedMarkUids.size > 0) {
+            marks.forEach(unmountMark);
+        }
+        renderedMarkUids.clear();
+        canvas.dataset.markCulling = "viewport";
+        canvas.dataset.renderedMarkCount = "0";
+        canvas.dataset.totalMarkCount = String(marks.length);
+        return;
+    }
+
     marks.forEach((mark) => {
-        const shouldRender = mark === selectedMark || markIsInsideBounds(mark, bounds);
+        const shouldRender = (mark === selectedMark || markIsInsideBounds(mark, bounds))
+            && !shouldSuppressClusteredMarkDom(mark, renderMode, selectedMark);
 
         if (shouldRender) {
             positionMarkElement(mark);
@@ -2311,8 +2439,6 @@ function applyCanvasView(options = {}) {
         positionAllMarks();
         geometryDirty = false;
     }
-    renderMarksForViewport();
-    positionPlacementMarker();
     canvas.style.setProperty("--canvas-pan-x", `${canvasView.panX}px`);
     canvas.style.setProperty("--canvas-pan-y", `${canvasView.panY}px`);
     canvas.style.setProperty("--canvas-zoom", String(canvasView.zoom));
@@ -2325,6 +2451,8 @@ function applyCanvasView(options = {}) {
     canvas.dataset.renderMode = renderMode;
     renderFogCanvas(renderMode);
     renderMapClusters();
+    renderMarksForViewport(renderMode);
+    positionPlacementMarker();
     updateSelectedMarkPopout();
     updateZoomControls();
 }
@@ -2477,7 +2605,8 @@ function expandWorldForMarks(extraMark = null) {
 
 function rebuildWorldForCurrentMarks() {
     exploredTiles.clear();
-    exploredTiles.add("0,0");
+    exploredTilesVersion += 1;
+    addExploredTile("0,0");
     commitTilesForMarks(marks);
     updateWorldBounds();
     geometryDirty = true;
@@ -2485,8 +2614,7 @@ function rebuildWorldForCurrentMarks() {
     clearRenderedMarkCache();
     resetClusterDrilldown();
     clusterCache = [];
-    clusterCacheSignature = "";
-    renderedClusterSignature = "";
+    invalidateClusterState();
     applyCanvasView();
 }
 
@@ -3002,6 +3130,7 @@ function hideMarkPopout() {
 
 function selectMark(mark, options = {}) {
     marks.forEach((item) => item.removeAttribute("data-selected"));
+    selectedMarkElement = mark;
     mountMark(mark);
     positionMarkElement(mark);
     mark.setAttribute("data-selected", "true");
@@ -3023,8 +3152,11 @@ function selectMark(mark, options = {}) {
 
 function setEmptyPreview() {
     marks.forEach((item) => item.removeAttribute("data-selected"));
+    selectedMarkElement = null;
     markPreview?.classList.add("is-empty");
     hideMarkPopout();
+    renderedClusterSignature = "";
+    renderMapClusters();
     previewChip.style.background = "#f0b35a";
     previewName.textContent = "No mark selected";
     previewMessage.textContent = "Choose an existing mark to preview it here.";
@@ -3242,7 +3374,12 @@ function selectedReturnClusterStartIndex(path) {
 }
 
 function selectedCanvasMark() {
-    return marks.find((item) => item.dataset.selected === "true") || null;
+    if (selectedMarkElement?.dataset?.selected === "true") {
+        return selectedMarkElement;
+    }
+
+    selectedMarkElement = marks.find((item) => item.dataset.selected === "true") || null;
+    return selectedMarkElement;
 }
 
 function deepestSharedCluster(currentPath, targetPath) {
@@ -3567,6 +3704,10 @@ function removeMarkElement(mark) {
     markPositions.delete(mark.dataset.uid);
     renderedMarkUids.delete(mark.dataset.uid);
     mark.remove();
+    markCollectionChanged();
+    if (wasSelected) {
+        selectedMarkElement = null;
+    }
     rebuildWorldForCurrentMarks();
 
     if (wasSelected) {
@@ -3596,6 +3737,7 @@ function addOrUpdateMark(mark, select = false, options = {}) {
         existing.style.setProperty("--mark-color", mark.color);
         cacheMarkPosition(existing);
         positionMarkElement(existing);
+        markCollectionChanged();
         if (!options.deferLayout) {
             expandWorldForMarks();
         }
@@ -3608,6 +3750,7 @@ function addOrUpdateMark(mark, select = false, options = {}) {
     const element = createMarkElement(mark);
     marks.push(element);
     cacheMarkPosition(element);
+    markCollectionChanged();
     const tileX = Math.floor(Number.parseFloat(mark.x ?? "0") / tileSize);
     const tileY = Math.floor(Number.parseFloat(mark.y ?? "0") / tileSize);
     revealExploredNeighbors(tileX, tileY);
@@ -3620,7 +3763,7 @@ function addOrUpdateMark(mark, select = false, options = {}) {
     if (select) {
         mountMark(element);
         selectMark(element);
-    } else {
+    } else if (!options.deferLayout) {
         renderMarksForViewport();
     }
     return element;
@@ -3770,14 +3913,20 @@ function removeMissingMarks(markUids, options = {}) {
             return true;
         }
 
+        if (selectedMarkElement === mark) {
+            selectedMarkElement = null;
+        }
         mark.remove();
         markPositions.delete(mark.dataset.uid);
         renderedMarkUids.delete(mark.dataset.uid);
         return false;
     });
 
-    if (marks.length !== originalCount && !options.deferLayout) {
-        rebuildWorldForCurrentMarks();
+    if (marks.length !== originalCount) {
+        markCollectionChanged();
+        if (!options.deferLayout) {
+            rebuildWorldForCurrentMarks();
+        }
     }
 }
 
@@ -4111,8 +4260,8 @@ function syncMarks(payload) {
     hasPersistedClusterPayload = Array.isArray(payload.clusters) && Array.isArray(payload.cluster_memberships);
     persistedClusters = hasPersistedClusterPayload ? payload.clusters : [];
     persistedClusterMemberships = hasPersistedClusterPayload ? payload.cluster_memberships : [];
-    clusterCacheSignature = "";
-    renderedClusterSignature = "";
+    clusterDataVersion += 1;
+    invalidateClusterState();
     markItems.forEach((mark) => addOrUpdateMark(mark, false, { deferLayout: true }));
     removeMissingMarks(payload.mark_uids, { deferLayout: true });
     rebuildMarkPositionCache();
@@ -4195,9 +4344,9 @@ function startLiveUpdates() {
 
 marks.forEach(bindMark);
 rebuildMarkPositionCache();
-const selectedMark = marks.find((mark) => mark.dataset.selected === "true");
-if (selectedMark) {
-    selectMark(selectedMark, { showPopout: false });
+const initialSelectedMark = marks.find((mark) => mark.dataset.selected === "true");
+if (initialSelectedMark) {
+    selectMark(initialSelectedMark, { showPopout: false });
 } else if (marks.length === 0) {
     setEmptyPreview();
 }
@@ -4404,11 +4553,15 @@ if (canvas && xField && yField && placementNote) {
             return;
         }
 
-        if (event.button !== 0 || event.target.closest(".mark-dot") || event.target.closest(".canvas-hint")) {
+        if (event.button !== 0
+            || event.target.closest(".mark-dot")
+            || event.target.closest(".map-cluster")
+            || event.target.closest("[data-mark-popout]")
+            || event.target.closest(".canvas-hint")) {
             return;
         }
 
-        hideMarkPopout();
+        setEmptyPreview();
 
         if (event.shiftKey || keyboardPanActive) {
             return;
@@ -4724,16 +4877,25 @@ if (markPopout) {
 }
 
 document.addEventListener("click", (event) => {
-    if (!markPopout || markPopout.hidden) {
-        return;
-    }
-
     if (suppressNextDocumentClick) {
         suppressNextDocumentClick = false;
         return;
     }
 
-    if (closestElement(event.target, "[data-mark-popout]") || closestElement(event.target, ".mark-dot") || closestElement(event.target, "[data-recent-uid]")) {
+    if (closestElement(event.target, "[data-mark-popout]")
+        || closestElement(event.target, ".mark-dot")
+        || closestElement(event.target, ".map-cluster")
+        || closestElement(event.target, ".canvas-hint")
+        || closestElement(event.target, "[data-recent-uid]")) {
+        return;
+    }
+
+    if (selectedCanvasMark() && closestElement(event.target, "[data-mark-canvas]")) {
+        setEmptyPreview();
+        return;
+    }
+
+    if (!markPopout || markPopout.hidden) {
         return;
     }
 

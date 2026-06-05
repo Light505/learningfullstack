@@ -28,6 +28,49 @@ async function fitWholeWorld(page) {
   })).toBeLessThan(0.01);
 }
 
+async function clickEmptyCanvas(page) {
+  await page.locator("[data-mark-canvas]").evaluate((canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const candidates = [
+      [0.15, 0.85],
+      [0.85, 0.85],
+      [0.15, 0.15],
+      [0.85, 0.15],
+      [0.5, 0.85],
+      [0.85, 0.5],
+      [0.5, 0.15],
+      [0.15, 0.5],
+      [0.5, 0.5],
+    ];
+    const blockedSelector = ".mark-dot, .map-cluster, [data-mark-popout]:not([hidden]), .canvas-hint, [data-recent-uid]";
+
+    for (const [xRatio, yRatio] of candidates) {
+      const x = rect.left + (rect.width * xRatio);
+      const y = rect.top + (rect.height * yRatio);
+      const blocked = document.elementsFromPoint(x, y).some((element) => (
+        element !== canvas && element.closest(blockedSelector)
+      ));
+
+      if (!blocked) {
+        canvas.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          clientX: x,
+          clientY: y,
+        }));
+        return;
+      }
+    }
+
+    canvas.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      button: 0,
+      clientX: rect.left + (rect.width * 0.5),
+      clientY: rect.top + (rect.height * 0.5),
+    }));
+  });
+}
+
 test.describe("responsive app layout", () => {
   test("places recent marks below the main workspace without sidebar scrolling", async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -524,6 +567,94 @@ test.describe("responsive app layout", () => {
     await expect(page.locator(".map-cluster[data-selected-cluster='true'][data-cluster-level='neighbor']")).toBeVisible();
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Ring Return");
     await expect(page.locator("[data-mark-popout]")).toBeHidden();
+  });
+
+  test("empty canvas click clears the selected mark", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const mark = {
+        uid: `empty-deselect-${Date.now()}`,
+        display_name: "Empty Deselect",
+        message: "Clear me from empty canvas.",
+        drawing: null,
+        x_percent: "0.00",
+        y_percent: "0.00",
+        color: "#9fc5a8",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: 1,
+          marks: [mark],
+          recent_marks: [mark],
+          mark_uids: [mark.uid],
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list]").getByRole("button", { name: /empty deselect/i }).click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Empty Deselect", { timeout: 8000 });
+    await expect(page.locator("[data-preview-name]")).toHaveText("Empty Deselect");
+    await expect(page.locator("[data-mark-popout]")).toBeVisible();
+
+    await clickEmptyCanvas(page);
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(0);
+    await expect(page.locator("[data-preview-name]")).toHaveText("No mark selected");
+    await expect(page.locator("[data-mark-popout]")).toBeHidden();
+  });
+
+  test("empty canvas click clears selected cluster highlight", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["Cluster Deselect", 0, 0],
+        ["Cluster Deselect Neighbor", 80, 80],
+        ["Cluster Deselect System", 1200, 0],
+        ["Cluster Deselect System Mate", 1280, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `cluster-deselect-${index}-${now}`,
+        display_name: name,
+        message: "Clear selected cluster probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list] [data-recent-uid^='cluster-deselect-0-']").click();
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Cluster Deselect", { timeout: 8000 });
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toBeVisible();
+    await expect(page.locator("[data-mark-popout]")).toBeHidden();
+
+    await clickEmptyCanvas(page);
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(0);
+    await expect(page.locator("[data-preview-name]")).toHaveText("No mark selected");
+    await expect(page.locator("[data-mark-popout]")).toBeHidden();
+    await expect(page.locator(".map-cluster[data-selected-cluster='true']")).toHaveCount(0);
   });
 
   test("compact locator appears for an offscreen clustered selected mark", async ({ page }) => {
