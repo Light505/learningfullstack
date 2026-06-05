@@ -3469,6 +3469,79 @@ function animateWorldOverview(options = {}) {
     });
 }
 
+function animateMarkTraversalLevel(mark, levelIndex, options = {}) {
+    if (!canvas || !mark) {
+        return Promise.resolve(null);
+    }
+
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return Promise.resolve(null);
+    }
+
+    const level = clusterLevels[levelIndex] || activeClusterLevel();
+    const timing = options.timing || recentClusterOpenTiming;
+    const cameraDuration = timing.camera ?? recentClusterOpenTiming.camera;
+    const settleDuration = timing.settle ?? recentClusterOpenTiming.settle;
+    const view = canvasViewForBounds({ minX: x, maxX: x, minY: y, maxY: y }, {
+        padding: Math.max(level?.padding ?? 84, 128),
+        minSpan: 1,
+        minZoom: 0,
+        maxZoom: clusterTargetZoomForLevel(levelIndex, canvasView.zoom),
+    });
+
+    leaveFitWorldMode();
+    return new Promise((resolve) => {
+        animateCanvasViewTo(view, cameraDuration, {
+            easing: easeInOutCubic,
+            onComplete: () => {
+                window.setTimeout(() => resolve({ mark, levelIndex, view }), settleDuration);
+            },
+        });
+    });
+}
+
+function recentTraversalStepsForPath(path, options = {}) {
+    const byLevel = new Map(path.map((entry) => [entry.levelIndex, entry]));
+    const startLevelIndex = options.startLevelIndex ?? 0;
+    const includeOverview = options.includeOverview === true;
+    const steps = [];
+
+    for (let levelIndex = startLevelIndex; levelIndex < clusterLevels.length; levelIndex += 1) {
+        const entry = byLevel.get(levelIndex);
+        if (entry) {
+            if (includeOverview) {
+                steps.push({ type: "overview", popupMode: "hidden", entry });
+            }
+            steps.push({ type: "drilldown", popupMode: "hidden", entry });
+        } else {
+            steps.push({ type: "mark-level", popupMode: "hidden", levelIndex });
+        }
+    }
+
+    return steps;
+}
+
+function recentSharedClusterTraversal(currentPath, targetPath) {
+    const shared = deepestSharedCluster(currentPath, targetPath);
+    if (!shared) {
+        return null;
+    }
+
+    return [
+        ...currentPath.slice(shared.currentPathIndex + 1).reverse().map((entry) => ({
+            type: "overview",
+            popupMode: "adaptive",
+            entry,
+        })),
+        ...recentTraversalStepsForPath(targetPath, {
+            startLevelIndex: shared.levelIndex + 1,
+            includeOverview: true,
+        }),
+    ];
+}
+
 async function runRecentClusterSequence(steps, mark, token, options = {}) {
     recentFocusSequenceActive = true;
     for (const step of steps) {
@@ -3483,6 +3556,8 @@ async function runRecentClusterSequence(steps, mark, token, options = {}) {
         updateSelectedMarkPopout();
         if (step.type === "overview") {
             await animateClusterOverview(step.entry.cluster, { timing: recentClusterOpenTiming });
+        } else if (step.type === "mark-level") {
+            await animateMarkTraversalLevel(mark, step.levelIndex, { timing: recentClusterOpenTiming });
         } else {
             await zoomIntoCluster(step.entry.cluster, { timing: recentClusterOpenTiming });
         }
@@ -3507,28 +3582,13 @@ function focusRecentMarkThroughClusters(mark, options = {}) {
     recentFocusPopupMode = options.hidePopupDuringTraversal ? "hidden" : null;
     updateSelectedMarkPopout();
 
-    if (markIsVisibleAtIndividualZoom(mark)) {
-        recentFocusSequenceActive = false;
-        recentFocusPopupMode = null;
-        focusMark(mark, 1.35);
-        updateSelectedMarkPopout();
-        return;
-    }
-
     const hierarchy = buildFullClusterHierarchy(markClusterItems());
     const path = clusterPathForMark(mark, hierarchy);
-    if (path.length === 0) {
-        recentFocusSequenceActive = false;
-        recentFocusPopupMode = null;
-        focusMark(mark, 1.35);
-        updateSelectedMarkPopout();
-        return;
-    }
 
     const currentMark = selectedCanvasMark();
     if (currentMark && currentMark !== mark) {
         const currentPath = clusterPathForMark(currentMark, hierarchy);
-        const sharedTraversal = sharedClusterTraversal(currentPath, path);
+        const sharedTraversal = recentSharedClusterTraversal(currentPath, path);
         if (sharedTraversal) {
             leaveFitWorldMode();
             runRecentClusterSequence(sharedTraversal, mark, token, options);
@@ -3539,10 +3599,10 @@ function focusRecentMarkThroughClusters(mark, options = {}) {
     const startIndex = recentClusterStartIndex(path);
 
     leaveFitWorldMode();
-    if (startIndex === 0 && path.length > 0) {
+    if (startIndex === 0) {
         animateWorldOverview({ timing: recentClusterOpenTiming })
             .then(() => runRecentClusterSequence(
-                path.map((entry) => ({ type: "drilldown", popupMode: "hidden", entry })),
+                recentTraversalStepsForPath(path),
                 mark,
                 token,
                 options,
@@ -3551,7 +3611,7 @@ function focusRecentMarkThroughClusters(mark, options = {}) {
     }
 
     runRecentClusterSequence(
-        path.slice(startIndex).map((entry) => ({ type: "drilldown", popupMode: "hidden", entry })),
+        recentTraversalStepsForPath(path, { startLevelIndex: path[startIndex]?.levelIndex ?? 0 }),
         mark,
         token,
         options,
@@ -4561,11 +4621,11 @@ if (canvas && xField && yField && placementNote) {
             return;
         }
 
-        setEmptyPreview();
-
         if (event.shiftKey || keyboardPanActive) {
             return;
         }
+
+        setEmptyPreview();
 
         const { x, y } = canvasPointFromEvent(event);
 
@@ -4887,6 +4947,10 @@ document.addEventListener("click", (event) => {
         || closestElement(event.target, ".map-cluster")
         || closestElement(event.target, ".canvas-hint")
         || closestElement(event.target, "[data-recent-uid]")) {
+        return;
+    }
+
+    if (event.shiftKey || keyboardPanActive) {
         return;
     }
 

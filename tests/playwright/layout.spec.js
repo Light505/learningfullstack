@@ -321,6 +321,7 @@ test.describe("responsive app layout", () => {
     await expect(page.locator("[data-preview-name]")).toHaveText("Recent Focus");
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Recent Focus");
     await expect(page.locator("[data-mark-popout]")).toBeVisible();
+    await page.waitForTimeout(500);
 
     const canvas = page.locator("[data-mark-canvas]");
     const box = await canvas.boundingBox();
@@ -701,7 +702,7 @@ test.describe("responsive app layout", () => {
       const canvas = document.querySelector("[data-mark-canvas]");
       const rect = canvas.getBoundingClientRect();
       const minCoordinate = Number.parseFloat(canvas.dataset.minCoordinate || "-102400");
-      const zoom = 0.05;
+      const zoom = 0.02;
       const centerX = 50000;
       const centerY = 50000;
 
@@ -785,7 +786,10 @@ test.describe("responsive app layout", () => {
       }));
     });
 
-    await page.locator("[data-recent-list] [data-recent-uid^='branch-locator-0-']").click();
+    await page.evaluate(() => {
+      const uid = document.querySelector("[data-recent-uid^='branch-locator-0-']").dataset.recentUid;
+      selectMark(markByUid(uid), { showPopout: false });
+    });
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Locator Current", { timeout: 8000 });
 
     const fitZoom = await page.locator("[data-mark-canvas]").evaluate(() => {
@@ -1856,6 +1860,173 @@ test.describe("responsive app layout", () => {
     expect(recentEvents.length).toBeGreaterThan(0);
     expect(recentEvents).toContain("galaxy");
     expect(recentEvents).toContain("system");
+  });
+
+  test("recent lone mark traverses before final focus", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const mark = {
+        uid: `lone-recent-${Date.now()}`,
+        display_name: "Lone Recent",
+        message: "No clusters around me.",
+        drawing: null,
+        x_percent: "50000.00",
+        y_percent: "50000.00",
+        color: "#86a6c9",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: 1,
+          marks: [mark],
+          recent_marks: [mark],
+          mark_uids: [mark.uid],
+        },
+      }));
+    });
+
+    const pathLevels = await page.evaluate(() => {
+      const mark = document.querySelector(".mark-dot[data-name='Lone Recent']");
+      return clusterPathForMark(mark).map((entry) => entry.level.key);
+    });
+    expect(pathLevels).toEqual([]);
+
+    const fitZoom = await page.locator("[data-mark-canvas]").evaluate(() => {
+      const canvasElement = document.querySelector("[data-mark-canvas]");
+      const world = document.querySelector("[data-canvas-world]");
+      const rect = canvasElement.getBoundingClientRect();
+      const style = getComputedStyle(world);
+      const worldWidth = Number.parseFloat(style.getPropertyValue("--canvas-world-width"));
+      const worldHeight = Number.parseFloat(style.getPropertyValue("--canvas-world-height"));
+      const padding = 36;
+      return Math.min(1, Math.max(1, rect.width - (padding * 2)) / worldWidth, Math.max(1, rect.height - (padding * 2)) / worldHeight);
+    });
+
+    await page.evaluate(() => {
+      window.__loneRecentZoomSamples = [];
+      const world = document.querySelector("[data-canvas-world]");
+      const stopAt = performance.now() + 1800;
+      const sample = () => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(world).transform);
+        window.__loneRecentZoomSamples.push(matrix.a);
+        if (performance.now() < stopAt) {
+          requestAnimationFrame(sample);
+        }
+      };
+      sample();
+    });
+    await page.locator("[data-recent-list] [data-recent-uid^='lone-recent-']").click();
+    await page.waitForTimeout(220);
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(0);
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Lone Recent", { timeout: 9000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+    const minZoom = await page.evaluate(() => Math.min(...window.__loneRecentZoomSamples));
+    expect(minZoom).toBeLessThanOrEqual(fitZoom * 1.25);
+  });
+
+  test("recent visible lone mark still traverses instead of focusing instantly", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const mark = {
+        uid: `visible-lone-${Date.now()}`,
+        display_name: "Visible Lone",
+        message: "Already in view.",
+        drawing: null,
+        x_percent: "0.00",
+        y_percent: "0.00",
+        color: "#9fc5a8",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      };
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: 1,
+          marks: [mark],
+          recent_marks: [mark],
+          mark_uids: [mark.uid],
+        },
+      }));
+
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const rect = canvas.getBoundingClientRect();
+      const minCoordinate = Number.parseFloat(canvas.dataset.minCoordinate || "-102400");
+      window.dispatchEvent(new CustomEvent("test:setCanvasView", {
+        detail: {
+          zoom: 1.2,
+          panX: (rect.width / 2) - ((0 - minCoordinate) * 1.2),
+          panY: (rect.height / 2) - ((0 - minCoordinate) * 1.2),
+          clamp: false,
+        },
+      }));
+    });
+
+    await page.locator("[data-recent-list] [data-recent-uid^='visible-lone-']").click();
+    await page.waitForTimeout(220);
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(0);
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Visible Lone", { timeout: 9000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+  });
+
+  test("recent partial cluster path continues with synthetic mark traversal", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const now = Date.now();
+      const clusteredOffsets = [0, 80, 1200, 1280, 3600, 3680, 4800, 4880];
+      const clusteredMarks = [
+        ...clusteredOffsets.map((x, index) => [`partial-a-${index}`, x, index % 2 === 0 ? 0 : 80]),
+        ...clusteredOffsets.map((x, index) => [`partial-b-${index}`, x + 13000, index % 2 === 0 ? 0 : 80]),
+      ];
+      const marks = [
+        ...clusteredMarks,
+        ["Partial Target", 9000, 0],
+      ].map(([name, x, y], index) => ({
+        uid: name === "Partial Target" ? `partial-target-${now}` : `partial-path-${index}-${now}`,
+        display_name: name,
+        message: "Partial path probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks.filter((mark) => mark.display_name === "Partial Target"),
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    const pathLevels = await page.evaluate(() => {
+      const uid = document.querySelector("[data-recent-uid^='partial-target-']").dataset.recentUid;
+      const mark = markByUid(uid);
+      return clusterPathForMark(mark).map((entry) => entry.level.key);
+    });
+    expect(pathLevels).toEqual(["supercluster"]);
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator(".map-cluster[data-cluster-level='supercluster']")).toBeVisible();
+    await page.locator("[data-recent-list] [data-recent-uid^='partial-target-']").click();
+    await page.waitForTimeout(1200);
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(0);
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Partial Target", { timeout: 9000 });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
   });
 
   test("recent mark focus traverses shared cluster ancestry instead of jumping to world view", async ({ page }) => {
