@@ -211,6 +211,8 @@ let pendingClusterTransition = null;
 let previousMarkClusterCenter = new Map();
 let clusterCache = [];
 let clusterCacheSignature = "";
+let clusterHierarchyCache = null;
+let clusterHierarchySignature = "";
 let persistedClusters = [];
 let persistedClusterMemberships = [];
 let hasPersistedClusterPayload = false;
@@ -228,6 +230,7 @@ let exploredTilesVersion = 0;
 let clusterDataVersion = 0;
 let worldGeometryVersion = 0;
 let deferredMarkRenderRefresh = null;
+let largeClusteredMapUnmountRefreshTimer = null;
 let coalescingCleanupTimer = null;
 let expandingCleanupTimer = null;
 let clusteredMarkCount = 0;
@@ -633,8 +636,14 @@ function invalidateClusterState() {
     renderedMarkClusterStateSignature = "";
 }
 
+function invalidateClusterHierarchy() {
+    clusterHierarchySignature = "";
+    clusterHierarchyCache = null;
+}
+
 function markCollectionChanged() {
     marksVersion += 1;
+    invalidateClusterHierarchy();
     invalidateClusterState();
 }
 
@@ -1034,8 +1043,9 @@ function renderFogCanvas(renderMode) {
 }
 
 function markToClusterItem(mark) {
-    const x = Number.parseFloat(mark.dataset.x || "0");
-    const y = Number.parseFloat(mark.dataset.y || "0");
+    const position = markPosition(mark);
+    const x = position?.x;
+    const y = position?.y;
 
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
         return null;
@@ -1093,8 +1103,9 @@ function averageLocation(items) {
 
 function boundsForMarks(markElements) {
     return markElements.reduce((bounds, mark) => {
-        const x = Number.parseFloat(mark.dataset.x || "0");
-        const y = Number.parseFloat(mark.dataset.y || "0");
+        const position = markPosition(mark);
+        const x = position?.x;
+        const y = position?.y;
         return {
             minX: Math.min(bounds.minX, x),
             maxX: Math.max(bounds.maxX, x),
@@ -1260,7 +1271,7 @@ function currentClusters() {
         clusterCacheSignature = signature;
 
         const items = markClusterItemsForDrilldown();
-        const hierarchy = buildFullClusterHierarchy(items);
+        const hierarchy = fullClusterHierarchy();
 
         let result = null;
         for (let i = levelIndex; i < clusterLevels.length; i += 1) {
@@ -1478,8 +1489,9 @@ function groupItemsByRadius(items, radius) {
 function itemsFromMarkElements(markElements) {
     return markElements
         .map((mark) => {
-            const x = Number.parseFloat(mark.dataset.x || "0");
-            const y = Number.parseFloat(mark.dataset.y || "0");
+            const position = markPosition(mark);
+            const x = position?.x;
+            const y = position?.y;
             if (!Number.isFinite(x) || !Number.isFinite(y)) {
                 return null;
             }
@@ -1774,8 +1786,9 @@ function startClusterExpansion(cluster, expandsToMarks) {
     startClusterExpansionState(cluster, currentLevelIdx, duration);
 
     cluster.marks.forEach((mark) => {
-        const x = Number.parseFloat(mark.dataset.x || "0");
-        const y = Number.parseFloat(mark.dataset.y || "0");
+        const position = markPosition(mark);
+        const x = position?.x;
+        const y = position?.y;
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
             return;
         }
@@ -1800,6 +1813,16 @@ function startClusterExpansion(cluster, expandsToMarks) {
         });
         scheduleMarkRenderRefresh();
     }, duration);
+}
+
+function fullClusterHierarchy() {
+    const signature = `${marksVersion}|${clusterDataVersion}`;
+    if (signature !== clusterHierarchySignature || clusterHierarchyCache === null) {
+        clusterHierarchySignature = signature;
+        clusterHierarchyCache = buildFullClusterHierarchy(markClusterItems());
+    }
+
+    return clusterHierarchyCache;
 }
 
 function clusterLevelIndexForKey(key) {
@@ -1855,8 +1878,9 @@ function zoomIntoCluster(cluster, options = {}) {
             onComplete: () => {
                 if (showsIndividualMarks) {
                     cluster.marks.forEach((mark) => {
-                        const x = Number.parseFloat(mark.dataset.x || "0");
-                        const y = Number.parseFloat(mark.dataset.y || "0");
+                        const position = markPosition(mark);
+                        const x = position?.x;
+                        const y = position?.y;
                         mark.style.setProperty("--mark-expand-x", `${cluster.x - x}px`);
                         mark.style.setProperty("--mark-expand-y", `${cluster.y - y}px`);
                         mark.style.setProperty("--mark-expand-scale", "0.08");
@@ -1923,8 +1947,9 @@ function renderMapClusters() {
             if (shouldCluster && (!wasClustered || zoomingOut)) {
                 const center = markClusterCenter.get(mark.dataset.uid);
                 if (center) {
-                    const mx = Number.parseFloat(mark.dataset.x || "0");
-                    const my = Number.parseFloat(mark.dataset.y || "0");
+                    const position = markPosition(mark);
+                    const mx = position?.x;
+                    const my = position?.y;
                     mark.style.setProperty("--coalesce-x", `${center.x - mx}px`);
                     mark.style.setProperty("--coalesce-y", `${center.y - my}px`);
                 }
@@ -1935,8 +1960,9 @@ function renderMapClusters() {
             if (!shouldCluster && (wasClustered || zoomingIn)) {
                 const oldCenter = previousMarkClusterCenter.get(mark.dataset.uid);
                 if (oldCenter) {
-                    const mx = Number.parseFloat(mark.dataset.x || "0");
-                    const my = Number.parseFloat(mark.dataset.y || "0");
+                    const position = markPosition(mark);
+                    const mx = position?.x;
+                    const my = position?.y;
                     mark.style.setProperty("--mark-expand-x", `${oldCenter.x - mx}px`);
                     mark.style.setProperty("--mark-expand-y", `${oldCenter.y - my}px`);
                     mark.style.setProperty("--mark-expand-scale", "0.08");
@@ -1948,6 +1974,13 @@ function renderMapClusters() {
 
         previousMarkClusterCenter = markClusterCenter;
         renderedMarkClusterStateSignature = clusterStateSignature;
+    }
+
+    if (marks.length > largeMarkDomThreshold
+        && canvas?.dataset.renderMode !== "detail"
+        && !selectedCanvasMark()
+        && clusteredMarkCount >= marks.length) {
+        scheduleLargeClusteredMapUnmountRefresh();
     }
 
     const hasActiveExpansion = activeClusterExpansion && activeClusterExpansion.until > performance.now();
@@ -2074,8 +2107,13 @@ function coordinateYToWorldPercent(coordinate) {
 }
 
 function positionMarkElement(mark) {
-    const x = Number.parseFloat(mark.dataset.x || "0");
-    const y = Number.parseFloat(mark.dataset.y || "0");
+    const position = markPosition(mark);
+    const x = position?.x;
+    const y = position?.y;
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return;
+    }
 
     mark.style.setProperty("--mark-x", `${coordinateToWorldPercent(x)}%`);
     mark.style.setProperty("--mark-y", `${coordinateYToWorldPercent(y)}%`);
@@ -2142,8 +2180,9 @@ function selectedMarkScreenPosition(mark) {
         return null;
     }
 
-    const x = Number.parseFloat(mark.dataset.x || "0");
-    const y = Number.parseFloat(mark.dataset.y || "0");
+    const position = markPosition(mark);
+    const x = position?.x;
+    const y = position?.y;
     return screenPositionForCoordinate(x, y);
 }
 
@@ -2244,10 +2283,18 @@ function updateSelectedMarkPopout() {
 }
 
 function cacheMarkPosition(mark) {
-    markPositions.set(mark.dataset.uid, {
-        x: Number.parseFloat(mark.dataset.x || "0"),
-        y: Number.parseFloat(mark.dataset.y || "0"),
-    });
+    const x = Number.parseFloat(mark.dataset.x || "0");
+    const y = Number.parseFloat(mark.dataset.y || "0");
+    markPositions.set(mark.dataset.uid, { x, y });
+    return { x, y };
+}
+
+function markPosition(mark) {
+    if (!mark?.dataset?.uid) {
+        return null;
+    }
+
+    return markPositions.get(mark.dataset.uid) || cacheMarkPosition(mark);
 }
 
 function rebuildMarkPositionCache() {
@@ -2267,8 +2314,9 @@ function bufferedWorldBounds(bounds, tileBuffer) {
 }
 
 function markIsInsideBounds(mark, bounds) {
-    const x = Number.parseFloat(mark.dataset.x || "0");
-    const y = Number.parseFloat(mark.dataset.y || "0");
+    const position = markPosition(mark);
+    const x = position?.x;
+    const y = position?.y;
 
     return Number.isFinite(x) && Number.isFinite(y)
         && x >= bounds.minX && x <= bounds.maxX
@@ -2302,6 +2350,17 @@ function scheduleMarkRenderRefresh() {
         deferredMarkRenderRefresh = null;
         renderMarksForViewport();
     }, 0);
+}
+
+function scheduleLargeClusteredMapUnmountRefresh() {
+    if (largeClusteredMapUnmountRefreshTimer !== null) {
+        return;
+    }
+
+    largeClusteredMapUnmountRefreshTimer = window.setTimeout(() => {
+        largeClusteredMapUnmountRefreshTimer = null;
+        renderMarksForViewport();
+    }, 700);
 }
 
 function scheduleCoalescingCleanup(mark) {
@@ -3214,7 +3273,7 @@ function clusterPathForMark(mark, hierarchy = null) {
         return [];
     }
 
-    const clusterHierarchy = hierarchy || buildFullClusterHierarchy(markClusterItems());
+    const clusterHierarchy = hierarchy || fullClusterHierarchy();
     return clusterLevels
         .map((level, levelIndex) => {
             const cluster = (clusterHierarchy[levelIndex] || []).find((item) => (
@@ -3606,7 +3665,7 @@ function focusRecentMarkThroughClusters(mark, options = {}) {
     recentFocusPopupMode = options.hidePopupDuringTraversal ? "hidden" : null;
     updateSelectedMarkPopout();
 
-    const hierarchy = buildFullClusterHierarchy(markClusterItems());
+    const hierarchy = fullClusterHierarchy();
     const path = clusterPathForMark(mark, hierarchy);
 
     if (currentMark && currentMark !== mark) {
@@ -3661,7 +3720,7 @@ function focusSelectedMarkThroughClusters() {
         return;
     }
 
-    const hierarchy = buildFullClusterHierarchy(markClusterItems());
+    const hierarchy = fullClusterHierarchy();
     const targetPath = clusterPathForMark(mark, hierarchy);
     if (targetPath.length === 0) {
         recentFocusSequenceActive = false;
@@ -4344,6 +4403,7 @@ function syncMarks(payload) {
     persistedClusters = hasPersistedClusterPayload ? payload.clusters : [];
     persistedClusterMemberships = hasPersistedClusterPayload ? payload.cluster_memberships : [];
     clusterDataVersion += 1;
+    invalidateClusterHierarchy();
     invalidateClusterState();
     markItems.forEach((mark) => addOrUpdateMark(mark, false, { deferLayout: true }));
     removeMissingMarks(payload.mark_uids, { deferLayout: true });
