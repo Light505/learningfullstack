@@ -3,7 +3,10 @@
 ## Benchmark Run (2026-06-05)
 
 Configuration: 10,000 marks, 100 regions, 1366x768 viewport
-Command: `npm run benchmark:canvas -- --output=test-results/canvas-benchmark.json`
+Command: `npm run benchmark:canvas -- --marks=10000`
+
+For current benchmark usage, output format, and budget guidance, see
+[Canvas benchmarking](benchmarking.md).
 
 ### Summary
 
@@ -16,6 +19,27 @@ Command: `npm run benchmark:canvas -- --output=test-results/canvas-benchmark.jso
 
 **Critical finding:** mapPan is the worst performer with p95=1,066ms, max=20,482ms,
 89/90 frames >33.3ms (60fps budget). renderMarksForViewport dominates during map panning.
+
+### Capacity Finding
+
+The unified benchmark now reports capacity across 1k, 2k, 5k, 10k, and 20k mark
+counts in `canvas-benchmark-summary.json`. Treat the 60fps capacity as the
+highest mark count where every scenario keeps p95 below `16.7ms`.
+
+Use the console verdict first:
+
+```powershell
+npm run benchmark:canvas
+```
+
+For quick local checks while optimizing, run:
+
+```powershell
+npm run benchmark:canvas:quick
+```
+
+If the verdict drops after a rendering change, inspect the first failing scale
+and the hottest function column before changing production code.
 
 ### Hot-Path Breakdown
 
@@ -143,7 +167,7 @@ iterates all marks to set `is-clustered` class and coalescing styles.
 
 ## Next Steps
 
-1. Run benchmark with `--marks=5000` and `--marks=20000` to confirm scaling behavior
+1. Run the unified benchmark to confirm cross-scale capacity
 2. Profile `renderMarksForViewport` with mark count vs. time to confirm linear scaling
 3. Implement and benchmark the "skip clustered marks" optimization
 4. Validate that cluster transitions still work correctly after optimization

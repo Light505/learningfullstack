@@ -47,13 +47,11 @@ Canvas benchmark:
 
 ```powershell
 npm run benchmark:canvas
-npm run benchmark:canvas -- --marks=10000 --output=test-results/canvas-benchmark.json
+npm run benchmark:canvas:quick
 ```
 
-The benchmark uses Playwright to inject synthetic marks through the existing
-test hooks, records canvas hot-path timings, and reports frame summaries for
-fit-world, detail pan, and map pan scenarios. Keep Docker running at
-`http://localhost:8080` before running it.
+See [Canvas benchmarking](docs/benchmarking.md) for prerequisites, command
+options, output files, and performance budget guidance.
 
 ## Main Files
 
@@ -74,3 +72,4 @@ docker-compose.web.yml       VPS web stack
 - [Deployment](docs/deployment.md)
 - [Roadmap](docs/roadmap.md)
 - [Moderation and safety](docs/moderation-safety.md)
+- [Canvas benchmarking](docs/benchmarking.md)
