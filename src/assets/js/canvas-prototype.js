@@ -206,6 +206,7 @@ let renderedTileSignature = "";
 let renderedFogSignature = "";
 let renderedClusterSignature = "";
 let renderedMarkClusterStateSignature = "";
+let renderedMarkViewportSignature = "";
 let committedClusterLevelIndex = null;
 let pendingClusterTransition = null;
 let previousMarkClusterCenter = new Map();
@@ -222,15 +223,22 @@ let recentFocusSequenceActive = false;
 let recentFocusPopupMode = null;
 let selectedMarkElement = null;
 const markPositions = new Map();
+const marksByUid = new Map(marks.map((mark) => [mark.dataset.uid, mark]));
 const markDrawingRequests = new Map();
 const renderedTileElements = new Map();
 const renderedMarkUids = new Set();
+const markSpatialIndex = new Map();
 let marksVersion = 0;
 let exploredTilesVersion = 0;
 let clusterDataVersion = 0;
 let worldGeometryVersion = 0;
+let markSpatialIndexDirty = true;
 let deferredMarkRenderRefresh = null;
+let clusterLayerIntegrityTimer = null;
 let largeClusteredMapUnmountRefreshTimer = null;
+let deferredMarkUnmountFrame = null;
+const deferredMarkUnmountQueue = [];
+const deferredMarkUnmountUids = new Set();
 let coalescingCleanupTimer = null;
 let expandingCleanupTimer = null;
 let clusteredMarkCount = 0;
@@ -1137,20 +1145,22 @@ function makeClusterNode(members, level) {
     };
 }
 
-function clusterMarksForRadius(items, radius) {
+function groupRawItemsByRadius(items, radius) {
     const cell = radius || 1;
+    const radiusSquared = cell * cell;
     const grid = new Map();
     const cellKey = (cx, cy) => `${cx},${cy}`;
+    const indexedItems = items.map((item, index) => ({ item, index }));
 
-    items.forEach((item) => {
-        const cx = Math.floor(item.x / cell);
-        const cy = Math.floor(item.y / cell);
+    indexedItems.forEach((entry) => {
+        const cx = Math.floor(entry.item.x / cell);
+        const cy = Math.floor(entry.item.y / cell);
         const key = cellKey(cx, cy);
         const bucket = grid.get(key);
         if (bucket) {
-            bucket.push(item);
+            bucket.push(entry);
         } else {
-            grid.set(key, [item]);
+            grid.set(key, [entry]);
         }
     });
 
@@ -1172,12 +1182,12 @@ function clusterMarksForRadius(items, radius) {
         }
     };
 
-    items.forEach((item) => {
-        parent.set(item.uid, item.uid);
+    indexedItems.forEach((entry) => {
+        parent.set(entry.item.uid, entry.item.uid);
     });
 
-    const checked = new Set();
-    items.forEach((seed) => {
+    indexedItems.forEach((seedEntry) => {
+        const seed = seedEntry.item;
         const scx = Math.floor(seed.x / cell);
         const scy = Math.floor(seed.y / cell);
 
@@ -1187,15 +1197,14 @@ function clusterMarksForRadius(items, radius) {
                 if (!bucket) {
                     continue;
                 }
-                bucket.forEach((candidate) => {
-                    const pair = seed.uid < candidate.uid
-                        ? `${seed.uid}|${candidate.uid}`
-                        : `${candidate.uid}|${seed.uid}`;
-                    if (checked.has(pair)) {
+                bucket.forEach((candidateEntry) => {
+                    if (candidateEntry.index <= seedEntry.index) {
                         return;
                     }
-                    checked.add(pair);
-                    if (Math.hypot(candidate.x - seed.x, candidate.y - seed.y) <= radius) {
+                    const candidate = candidateEntry.item;
+                    const xDistance = candidate.x - seed.x;
+                    const yDistance = candidate.y - seed.y;
+                    if ((xDistance * xDistance) + (yDistance * yDistance) <= radiusSquared) {
                         union(seed.uid, candidate.uid);
                     }
                 });
@@ -1214,7 +1223,12 @@ function clusterMarksForRadius(items, radius) {
         }
     });
 
-    return [...groups.values()].map((members) => makeClusterNode(members));
+    return [...groups.values()];
+}
+
+function clusterMarksForRadius(items, radius) {
+    return groupRawItemsByRadius(items, radius)
+        .map((members) => makeClusterNode(members));
 }
 
 function clusterLevelIndexForZoom(zoom) {
@@ -1338,28 +1352,83 @@ function absorbLoneItemsIntoClusters(clusters, loneItems, level) {
         ...cluster,
         marks: [...cluster.marks],
     }));
+    const cell = level.radius || 1;
+    const radiusSquared = level.radius * level.radius;
+    const cellKey = (cx, cy) => `${cx},${cy}`;
+    const indexedClusters = nextClusters.map((cluster, index) => ({
+        cluster,
+        index,
+        cx: Math.floor(cluster.x / cell),
+        cy: Math.floor(cluster.y / cell),
+    }));
+    const grid = new Map();
+    const removeIndexedCluster = (entry) => {
+        const key = cellKey(entry.cx, entry.cy);
+        const bucket = grid.get(key);
+        if (!bucket) {
+            return;
+        }
+        const offset = bucket.indexOf(entry);
+        if (offset !== -1) {
+            bucket.splice(offset, 1);
+        }
+        if (bucket.length === 0) {
+            grid.delete(key);
+        }
+    };
+    const addIndexedCluster = (entry) => {
+        entry.cx = Math.floor(entry.cluster.x / cell);
+        entry.cy = Math.floor(entry.cluster.y / cell);
+        const key = cellKey(entry.cx, entry.cy);
+        const bucket = grid.get(key);
+        if (bucket) {
+            bucket.push(entry);
+        } else {
+            grid.set(key, [entry]);
+        }
+    };
+
+    indexedClusters.forEach(addIndexedCluster);
     const remainingLoneItems = [];
 
     loneItems.forEach((item) => {
-        const target = nextClusters
-            .map((cluster, index) => ({
-                cluster,
-                index,
-                distance: Math.hypot(item.x - cluster.x, item.y - cluster.y),
-            }))
-            .filter((candidate) => candidate.distance <= level.radius)
-            .sort((a, b) => (
-                a.distance - b.distance
-                || a.cluster.id.localeCompare(b.cluster.id)
-            ))[0];
+        const itemCx = Math.floor(item.x / cell);
+        const itemCy = Math.floor(item.y / cell);
+        let target = null;
+
+        for (let dx = -1; dx <= 1; dx += 1) {
+            for (let dy = -1; dy <= 1; dy += 1) {
+                const bucket = grid.get(cellKey(itemCx + dx, itemCy + dy));
+                if (!bucket) {
+                    continue;
+                }
+                bucket.forEach((entry) => {
+                    const xDistance = item.x - entry.cluster.x;
+                    const yDistance = item.y - entry.cluster.y;
+                    const distanceSquared = (xDistance * xDistance) + (yDistance * yDistance);
+                    if (distanceSquared > radiusSquared) {
+                        return;
+                    }
+                    if (!target
+                        || distanceSquared < target.distanceSquared
+                        || distanceSquared === target.distanceSquared && entry.cluster.id.localeCompare(target.entry.cluster.id) < 0) {
+                        target = { entry, distanceSquared };
+                    }
+                });
+            }
+        }
 
         if (!target) {
             remainingLoneItems.push(item);
             return;
         }
 
-        const markElements = [...target.cluster.marks, item.mark];
-        nextClusters[target.index] = rebuildClusterWithMarks(target.cluster, markElements, level.key);
+        removeIndexedCluster(target.entry);
+        const markElements = [...target.entry.cluster.marks, item.mark];
+        const rebuiltCluster = rebuildClusterWithMarks(target.entry.cluster, markElements, level.key);
+        nextClusters[target.entry.index] = rebuiltCluster;
+        target.entry.cluster = rebuiltCluster;
+        addIndexedCluster(target.entry);
     });
 
     return { clusters: nextClusters, remainingLoneItems };
@@ -1399,86 +1468,6 @@ function promoteChildClusters(children, parentLevel) {
 
 function buildClusterHierarchy(items) {
     return buildFullClusterHierarchy(items);
-}
-
-function groupRawItemsByRadius(items, radius) {
-    const cell = radius || 1;
-    const grid = new Map();
-    const cellKey = (cx, cy) => `${cx},${cy}`;
-
-    items.forEach((item) => {
-        const cx = Math.floor(item.x / cell);
-        const cy = Math.floor(item.y / cell);
-        const key = cellKey(cx, cy);
-        const bucket = grid.get(key);
-        if (bucket) {
-            bucket.push(item);
-        } else {
-            grid.set(key, [item]);
-        }
-    });
-
-    const parent = new Map();
-    const find = (uid) => {
-        let p = parent.get(uid);
-        while (p !== uid) {
-            parent.set(uid, parent.get(p));
-            uid = p;
-            p = parent.get(uid);
-        }
-        return uid;
-    };
-    const union = (a, b) => {
-        const ra = find(a);
-        const rb = find(b);
-        if (ra !== rb) {
-            parent.set(ra, rb);
-        }
-    };
-
-    items.forEach((item) => {
-        parent.set(item.uid, item.uid);
-    });
-
-    const checked = new Set();
-    items.forEach((seed) => {
-        const scx = Math.floor(seed.x / cell);
-        const scy = Math.floor(seed.y / cell);
-
-        for (let dx = -1; dx <= 1; dx += 1) {
-            for (let dy = -1; dy <= 1; dy += 1) {
-                const bucket = grid.get(cellKey(scx + dx, scy + dy));
-                if (!bucket) {
-                    continue;
-                }
-                bucket.forEach((candidate) => {
-                    const pair = seed.uid < candidate.uid
-                        ? `${seed.uid}|${candidate.uid}`
-                        : `${candidate.uid}|${seed.uid}`;
-                    if (checked.has(pair)) {
-                        return;
-                    }
-                    checked.add(pair);
-                    if (Math.hypot(candidate.x - seed.x, candidate.y - seed.y) <= radius) {
-                        union(seed.uid, candidate.uid);
-                    }
-                });
-            }
-        }
-    });
-
-    const groups = new Map();
-    items.forEach((item) => {
-        const root = find(item.uid);
-        const group = groups.get(root);
-        if (group) {
-            group.push(item);
-        } else {
-            groups.set(root, [item]);
-        }
-    });
-
-    return [...groups.values()];
 }
 
 function groupItemsByRadius(items, radius) {
@@ -1549,7 +1538,7 @@ function persistedClusterMembers(clusterUid, levelKey, allowedUids = null) {
 
     return memberUids
         .filter((uid) => allowed === null || allowed.has(uid))
-        .map((uid) => marks.find((mark) => mark.dataset.uid === uid))
+        .map(markByUid)
         .filter(Boolean);
 }
 
@@ -1685,6 +1674,10 @@ function mapClusterColor(cluster) {
 }
 
 function averagePreviousChildClusterCenter(cluster, previousCenters = previousMarkClusterCenter) {
+    if (!previousCenters) {
+        return null;
+    }
+
     const seen = new Set();
     const centers = [];
     cluster.marks.forEach((mark) => {
@@ -1728,6 +1721,23 @@ function structuralParentCenterForCluster(cluster, parentLevelIndex) {
     }
 
     return { x: parent.x, y: parent.y };
+}
+
+function structuralParentCentersByUid(parentLevelIndex) {
+    if (parentLevelIndex < 0 || parentLevelIndex >= clusterLevels.length) {
+        return null;
+    }
+
+    const centers = new Map();
+    structuralClustersForLevelIndex(markClusterItems(), parentLevelIndex)
+        .filter((candidate) => candidate.level === clusterLevels[parentLevelIndex].key)
+        .forEach((candidate) => {
+            candidate.marks.forEach((mark) => {
+                centers.set(mark.dataset.uid, { x: candidate.x, y: candidate.y });
+            });
+        });
+
+    return centers;
 }
 
 function clusterContainsAnyUid(cluster, uidSet) {
@@ -1923,7 +1933,7 @@ function renderMapClusters() {
     const transition = pendingClusterTransition;
     const zoomingOut = transition?.direction === "out";
     const zoomingIn = transition?.direction === "in";
-    const clusterStateSignature = `${clusterCacheSignature}:${worldBounds.minX}:${worldBounds.minY}`;
+    const clusterStateSignature = clusterCacheSignature;
     const shouldUpdateMarkClusterState = Boolean(transition)
         || clusterStateSignature !== renderedMarkClusterStateSignature;
 
@@ -1938,39 +1948,50 @@ function renderMapClusters() {
         });
         clusteredMarkCount = coveredUids.size;
 
-        marks.forEach((mark) => {
-            const shouldCluster = coveredUids.has(mark.dataset.uid);
-            const wasClustered = mark.classList.contains("is-clustered");
+        if (transition) {
+            marks.forEach((mark) => {
+                const shouldCluster = coveredUids.has(mark.dataset.uid);
+                const wasClustered = mark.classList.contains("is-clustered");
 
-            mark.classList.toggle("is-clustered", shouldCluster);
+                mark.classList.toggle("is-clustered", shouldCluster);
 
-            if (shouldCluster && (!wasClustered || zoomingOut)) {
-                const center = markClusterCenter.get(mark.dataset.uid);
-                if (center) {
-                    const position = markPosition(mark);
-                    const mx = position?.x;
-                    const my = position?.y;
-                    mark.style.setProperty("--coalesce-x", `${center.x - mx}px`);
-                    mark.style.setProperty("--coalesce-y", `${center.y - my}px`);
+                if (shouldCluster && (!wasClustered || zoomingOut)) {
+                    const center = markClusterCenter.get(mark.dataset.uid);
+                    if (center) {
+                        const position = markPosition(mark);
+                        const mx = position?.x;
+                        const my = position?.y;
+                        mark.style.setProperty("--coalesce-x", `${center.x - mx}px`);
+                        mark.style.setProperty("--coalesce-y", `${center.y - my}px`);
+                    }
+                    mark.dataset.coalescing = "true";
+                    scheduleCoalescingCleanup(mark);
                 }
-                mark.dataset.coalescing = "true";
-                scheduleCoalescingCleanup(mark);
-            }
 
-            if (!shouldCluster && (wasClustered || zoomingIn)) {
-                const oldCenter = previousMarkClusterCenter.get(mark.dataset.uid);
-                if (oldCenter) {
-                    const position = markPosition(mark);
-                    const mx = position?.x;
-                    const my = position?.y;
-                    mark.style.setProperty("--mark-expand-x", `${oldCenter.x - mx}px`);
-                    mark.style.setProperty("--mark-expand-y", `${oldCenter.y - my}px`);
-                    mark.style.setProperty("--mark-expand-scale", "0.08");
+                if (!shouldCluster && (wasClustered || zoomingIn)) {
+                    const oldCenter = previousMarkClusterCenter.get(mark.dataset.uid);
+                    if (oldCenter) {
+                        const position = markPosition(mark);
+                        const mx = position?.x;
+                        const my = position?.y;
+                        mark.style.setProperty("--mark-expand-x", `${oldCenter.x - mx}px`);
+                        mark.style.setProperty("--mark-expand-y", `${oldCenter.y - my}px`);
+                        mark.style.setProperty("--mark-expand-scale", "0.08");
+                    }
+                    mark.dataset.expanding = "true";
+                    scheduleExpandingCleanup(mark);
                 }
-                mark.dataset.expanding = "true";
-                scheduleExpandingCleanup(mark);
-            }
-        });
+            });
+        } else {
+            previousMarkClusterCenter.forEach((_center, uid) => {
+                if (!coveredUids.has(uid)) {
+                    markByUid(uid)?.classList.remove("is-clustered");
+                }
+            });
+            coveredUids.forEach((uid) => {
+                markByUid(uid)?.classList.add("is-clustered");
+            });
+        }
 
         previousMarkClusterCenter = markClusterCenter;
         renderedMarkClusterStateSignature = clusterStateSignature;
@@ -1987,8 +2008,8 @@ function renderMapClusters() {
     const activeExpansionSignature = hasActiveExpansion
         ? `${activeClusterExpansion.x}:${activeClusterExpansion.y}:${activeClusterExpansion.strength}:${activeClusterExpansion.until}`
         : "";
-    const signature = `${clusterStateSignature}:${selectedUid}:${activeExpansionSignature}`;
-    if (signature === renderedClusterSignature) {
+    const signature = `${clusterStateSignature}:${worldGeometryVersion}:${selectedUid}:${activeExpansionSignature}`;
+    if (signature === renderedClusterSignature && (bubbles.length === 0 || mapClusters.children.length > 0)) {
         pendingClusterTransition = null;
         return;
     }
@@ -2000,7 +2021,6 @@ function renderMapClusters() {
             ? "explode"
             : null;
 
-    mapClusters.innerHTML = "";
     if (transitionMode) {
         clearClusterTransitionMode();
         setClusterTransitionMode(transitionMode, 560);
@@ -2008,20 +2028,33 @@ function renderMapClusters() {
         clearClusterTransitionMode();
     }
 
+    mapClusters.innerHTML = "";
+    const structuralParentCenters = transition ? structuralParentCentersByUid(transition.from) : null;
     bubbles.forEach((cluster) => {
         const count = cluster.count;
         const shape = mapClusterShape(cluster);
         const size = Math.min(46, 18 + (Math.sqrt(count) * 7));
         const buttonLevelKey = cluster.level || level?.key || "marks";
         const buttonLevel = clusterLevels.find((item) => item.key === buttonLevelKey) || level;
+
         const button = document.createElement("button");
+        button.type = "button";
+        button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (count === 1) {
+                focusMark(cluster.marks[0], 1.45);
+                return;
+            }
+            zoomIntoCluster(cluster);
+        });
 
         const levelWeight = Math.max(0, clusterLevels.findIndex((item) => item.key === buttonLevelKey));
         const expanding = activeClusterExpansion
             && activeClusterExpansion.until > performance.now()
             && clusterContainsAnyUid(cluster, activeClusterExpansion.uids);
         const transitionFrom = zoomingOut || zoomingIn
-            ? averagePreviousChildClusterCenter(cluster, previousClusterCenters) || structuralParentCenterForCluster(cluster, transition?.from)
+            ? averagePreviousChildClusterCenter(cluster, previousClusterCenters)
+                || averagePreviousChildClusterCenter(cluster, structuralParentCenters)
             : null;
         const expandFrom = expanding
             ? {
@@ -2038,19 +2071,21 @@ function renderMapClusters() {
             : { x: 0, y: 0, strength: 0 };
 
         const levelClass = buttonLevelKey !== "marks" ? ` level-${buttonLevelKey}` : "";
-        button.type = "button";
-        button.className = count > 1
+        const className = count > 1
             ? `map-cluster ${shape} is-multi${levelClass}`
             : `map-cluster ${shape}`;
-        button.style.setProperty("--cluster-x", `${cluster.x - worldBounds.minX}px`);
-        button.style.setProperty("--cluster-y", `${cluster.y - worldBounds.minY}px`);
-        button.style.setProperty("--cluster-screen-size", `${size}px`);
-        button.style.setProperty("--cluster-color", mapClusterColor(cluster));
-        button.style.setProperty("--cluster-expand-x", `${expandFrom.x}px`);
-        button.style.setProperty("--cluster-expand-y", `${expandFrom.y}px`);
-        button.style.setProperty("--cluster-expand-scale", String(Math.max(0.18, 0.55 - (expandFrom.strength * 0.05))));
-        button.style.setProperty("--cluster-pulse-scale", String(Math.max(0.28, 0.62 - (levelWeight * 0.07))));
-        button.style.setProperty("--cluster-pulse-ring", `${8 + (levelWeight * 5)}px`);
+        if (button.className !== className) {
+            button.className = className;
+        }
+        setStylePropertyIfChanged(button, "--cluster-x", `${cluster.x - worldBounds.minX}px`);
+        setStylePropertyIfChanged(button, "--cluster-y", `${cluster.y - worldBounds.minY}px`);
+        setStylePropertyIfChanged(button, "--cluster-screen-size", `${size}px`);
+        setStylePropertyIfChanged(button, "--cluster-color", mapClusterColor(cluster));
+        setStylePropertyIfChanged(button, "--cluster-expand-x", `${expandFrom.x}px`);
+        setStylePropertyIfChanged(button, "--cluster-expand-y", `${expandFrom.y}px`);
+        setStylePropertyIfChanged(button, "--cluster-expand-scale", String(Math.max(0.18, 0.55 - (expandFrom.strength * 0.05))));
+        setStylePropertyIfChanged(button, "--cluster-pulse-scale", String(Math.max(0.28, 0.62 - (levelWeight * 0.07))));
+        setStylePropertyIfChanged(button, "--cluster-pulse-ring", `${8 + (levelWeight * 5)}px`);
         button.dataset.count = String(count);
         button.dataset.clusterId = cluster.id;
         button.dataset.clusterLevel = buttonLevelKey;
@@ -2058,6 +2093,9 @@ function renderMapClusters() {
         if (selectedUid && cluster.marks.some((mark) => mark.dataset.uid === selectedUid)) {
             button.dataset.selectedCluster = "true";
             button.setAttribute("aria-current", "true");
+        } else {
+            delete button.dataset.selectedCluster;
+            button.removeAttribute("aria-current");
         }
 
         if (count > 1) {
@@ -2066,21 +2104,14 @@ function renderMapClusters() {
                 : buttonLevelKey === "galaxy" ? "G"
                 : buttonLevelKey === "supercluster" ? "SC"
                 : "";
-            button.textContent = String(count);
+            if (button.textContent !== String(count)) {
+                button.textContent = String(count);
+            }
             button.dataset.levelLabel = levelLabel;
             button.setAttribute("aria-label", `Zoom in to ${count} marks in this ${buttonLevel?.label || "cluster"}`);
         } else {
             button.setAttribute("aria-label", `View mark by ${cluster.marks[0].dataset.name}`);
         }
-
-        button.addEventListener("click", (event) => {
-            event.stopPropagation();
-            if (count === 1) {
-                focusMark(cluster.marks[0], 1.45);
-                return;
-            }
-            zoomIntoCluster(cluster);
-        });
 
         mapClusters.appendChild(button);
     });
@@ -2093,8 +2124,8 @@ function applyWorldGeometry() {
         return;
     }
 
-    canvas.style.setProperty("--canvas-world-width", `${worldBounds.maxX - worldBounds.minX}px`);
-    canvas.style.setProperty("--canvas-world-height", `${worldBounds.maxY - worldBounds.minY}px`);
+    setStylePropertyIfChanged(canvas, "--canvas-world-width", `${worldBounds.maxX - worldBounds.minX}px`);
+    setStylePropertyIfChanged(canvas, "--canvas-world-height", `${worldBounds.maxY - worldBounds.minY}px`);
     renderCanvasTiles();
 }
 
@@ -2115,8 +2146,14 @@ function positionMarkElement(mark) {
         return;
     }
 
-    mark.style.setProperty("--mark-x", `${coordinateToWorldPercent(x)}%`);
-    mark.style.setProperty("--mark-y", `${coordinateYToWorldPercent(y)}%`);
+    const signature = `${worldGeometryVersion}:${x}:${y}`;
+    if (mark.dataset.positionSignature === signature) {
+        return;
+    }
+
+    setStylePropertyIfChanged(mark, "--mark-x", `${coordinateToWorldPercent(x)}%`);
+    setStylePropertyIfChanged(mark, "--mark-y", `${coordinateYToWorldPercent(y)}%`);
+    mark.dataset.positionSignature = signature;
 }
 
 function positionAllMarks() {
@@ -2216,7 +2253,9 @@ function activeClusterForSelectedMark(mark) {
 }
 
 function selectedMarkPopoutAnchor(mark) {
-    const cluster = mark.classList.contains("is-clustered")
+    const shouldUseClusterAnchor = canvas?.dataset.renderMode !== "detail"
+        || mark.classList.contains("is-clustered");
+    const cluster = shouldUseClusterAnchor
         ? activeClusterForSelectedMark(mark)
         : null;
 
@@ -2286,6 +2325,8 @@ function cacheMarkPosition(mark) {
     const x = Number.parseFloat(mark.dataset.x || "0");
     const y = Number.parseFloat(mark.dataset.y || "0");
     markPositions.set(mark.dataset.uid, { x, y });
+    markSpatialIndexDirty = true;
+    delete mark.dataset.positionSignature;
     return { x, y };
 }
 
@@ -2300,6 +2341,102 @@ function markPosition(mark) {
 function rebuildMarkPositionCache() {
     markPositions.clear();
     marks.forEach(cacheMarkPosition);
+}
+
+function rebuildMarksByUid() {
+    marksByUid.clear();
+    marks.forEach((mark) => {
+        marksByUid.set(mark.dataset.uid, mark);
+    });
+}
+
+function markSpatialCellKey(cx, cy) {
+    return `${cx},${cy}`;
+}
+
+function markSpatialCellForPosition(position) {
+    return {
+        cx: Math.floor(position.x / tileSize),
+        cy: Math.floor(position.y / tileSize),
+    };
+}
+
+function rebuildMarkSpatialIndex() {
+    markSpatialIndex.clear();
+    marks.forEach((mark) => {
+        const position = markPosition(mark);
+        if (!Number.isFinite(position?.x) || !Number.isFinite(position?.y)) {
+            return;
+        }
+        const cell = markSpatialCellForPosition(position);
+        const key = markSpatialCellKey(cell.cx, cell.cy);
+        const bucket = markSpatialIndex.get(key);
+        if (bucket) {
+            bucket.push(mark);
+        } else {
+            markSpatialIndex.set(key, [mark]);
+        }
+    });
+    markSpatialIndexDirty = false;
+}
+
+function marksInBounds(bounds) {
+    if (markSpatialIndexDirty) {
+        rebuildMarkSpatialIndex();
+    }
+
+    const minCellX = Math.floor(bounds.minX / tileSize);
+    const maxCellX = Math.floor(bounds.maxX / tileSize);
+    const minCellY = Math.floor(bounds.minY / tileSize);
+    const maxCellY = Math.floor(bounds.maxY / tileSize);
+    const result = [];
+    const seen = new Set();
+
+    for (let cx = minCellX; cx <= maxCellX; cx += 1) {
+        for (let cy = minCellY; cy <= maxCellY; cy += 1) {
+            const bucket = markSpatialIndex.get(markSpatialCellKey(cx, cy));
+            if (!bucket) {
+                continue;
+            }
+            bucket.forEach((mark) => {
+                const uid = mark.dataset.uid;
+                if (!seen.has(uid) && markIsInsideBounds(mark, bounds)) {
+                    seen.add(uid);
+                    result.push(mark);
+                }
+            });
+        }
+    }
+
+    return result;
+}
+
+function markViewportSignature(bounds, renderMode, selectedMark) {
+    const minCellX = Math.floor(bounds.minX / tileSize);
+    const maxCellX = Math.floor(bounds.maxX / tileSize);
+    const minCellY = Math.floor(bounds.minY / tileSize);
+    const maxCellY = Math.floor(bounds.maxY / tileSize);
+
+    return [
+        renderMode,
+        marksVersion,
+        renderedMarkClusterStateSignature,
+        selectedMark?.dataset.uid || "",
+        minCellX,
+        maxCellX,
+        minCellY,
+        maxCellY,
+        coalescingCleanupMarks.size,
+        expandingCleanupMarks.size,
+        coalescingCleanupTimer === null ? "clean" : "coalescing",
+        expandingCleanupTimer === null ? "clean" : "expanding",
+    ].join("|");
+}
+
+function setStylePropertyIfChanged(element, property, value) {
+    if (element.style.getPropertyValue(property) !== value) {
+        element.style.setProperty(property, value);
+    }
 }
 
 function bufferedWorldBounds(bounds, tileBuffer) {
@@ -2336,9 +2473,80 @@ function mountMark(mark, fragment = null) {
 }
 
 function unmountMark(mark) {
-    if (mark.parentElement === canvasWorld) {
+    if (mark?.parentElement) {
         mark.remove();
     }
+}
+
+function mountedMarkElements() {
+    return Array.from(document.querySelectorAll(".mark-dot"));
+}
+
+function updateRenderedMarkCountDataset() {
+    if (canvas) {
+        canvas.dataset.markCulling = "viewport";
+        canvas.dataset.renderedMarkCount = String(renderedMarkUids.size);
+        canvas.dataset.totalMarkCount = String(marks.length);
+    }
+}
+
+function processDeferredMarkUnmounts() {
+    deferredMarkUnmountFrame = null;
+    const startedAt = performance.now();
+    const selectedMark = selectedCanvasMark();
+
+    while (deferredMarkUnmountQueue.length > 0 && performance.now() - startedAt < 4) {
+        const uid = deferredMarkUnmountQueue.shift();
+        if (!deferredMarkUnmountUids.delete(uid)) {
+            continue;
+        }
+        const mark = markByUid(uid);
+        if (!mark || mark === selectedMark) {
+            continue;
+        }
+        unmountMark(mark);
+        renderedMarkUids.delete(uid);
+    }
+
+    updateRenderedMarkCountDataset();
+
+    if (deferredMarkUnmountQueue.length > 0) {
+        deferredMarkUnmountFrame = window.setTimeout(processDeferredMarkUnmounts, 0);
+    }
+}
+
+function scheduleDeferredMarkUnmount(uid) {
+    if (!uid || deferredMarkUnmountUids.has(uid)) {
+        return;
+    }
+
+    deferredMarkUnmountUids.add(uid);
+    deferredMarkUnmountQueue.push(uid);
+    if (deferredMarkUnmountFrame === null) {
+        deferredMarkUnmountFrame = window.setTimeout(processDeferredMarkUnmounts, 0);
+    }
+}
+
+function unmountMountedMarksForLargeMap(mountedMarks, selectedMark = null) {
+    let removed = 0;
+
+    mountedMarks.forEach((mark) => {
+        if (!mark || mark === selectedMark) {
+            return;
+        }
+
+        const uid = mark.dataset.uid;
+        deferredMarkUnmountUids.delete(uid);
+        renderedMarkUids.delete(uid);
+        unmountMark(mark);
+        removed += 1;
+    });
+
+    if (removed > 0) {
+        updateRenderedMarkCountDataset();
+    }
+
+    return removed;
 }
 
 function scheduleMarkRenderRefresh() {
@@ -2352,6 +2560,24 @@ function scheduleMarkRenderRefresh() {
     }, 0);
 }
 
+function scheduleClusterLayerIntegrityCheck() {
+    if (clusterLayerIntegrityTimer !== null) {
+        return;
+    }
+
+    clusterLayerIntegrityTimer = window.setTimeout(() => {
+        clusterLayerIntegrityTimer = null;
+        if (!mapClusters || mapClusters.children.length > 0) {
+            return;
+        }
+
+        if (currentClusters().some((cluster) => cluster.count > 1)) {
+            renderedClusterSignature = "";
+            renderMapClusters();
+        }
+    }, 900);
+}
+
 function scheduleLargeClusteredMapUnmountRefresh() {
     if (largeClusteredMapUnmountRefreshTimer !== null) {
         return;
@@ -2359,8 +2585,22 @@ function scheduleLargeClusteredMapUnmountRefresh() {
 
     largeClusteredMapUnmountRefreshTimer = window.setTimeout(() => {
         largeClusteredMapUnmountRefreshTimer = null;
-        renderMarksForViewport();
+        if (!canvasWorld || canvas?.dataset.renderMode === "detail") {
+            return;
+        }
+
+        const selectedMark = selectedCanvasMark();
+        unmountMountedMarksForLargeMap(mountedMarkElements(), selectedMark);
     }, 700);
+}
+
+function startLargeMapMarkDomCleanup() {
+    if (!canvasWorld || canvas?.dataset.renderMode === "detail") {
+        return;
+    }
+
+    const selectedMark = selectedCanvasMark();
+    unmountMountedMarksForLargeMap(mountedMarkElements(), selectedMark);
 }
 
 function scheduleCoalescingCleanup(mark) {
@@ -2434,30 +2674,55 @@ function renderMarksForViewport(renderMode = canvas?.dataset.renderMode || "deta
     const selectedMark = selectedCanvasMark();
     const fragment = document.createDocumentFragment();
     const nextRenderedMarkUids = new Set();
+    const viewportSignature = markViewportSignature(bounds, renderMode, selectedMark);
 
     if (largeClusteredMapHasNoVisibleMarkDom(selectedMark, renderMode)) {
-        if (renderedMarkUids.size > 0) {
-            marks.forEach(unmountMark);
+        const mountedMarks = mountedMarkElements();
+        if (renderedMarkUids.size === 0 && mountedMarks.length === 0 && canvas.dataset.renderedMarkCount === "0") {
+            renderedMarkViewportSignature = viewportSignature;
+            canvas.dataset.totalMarkCount = String(marks.length);
+            return;
         }
+        unmountMountedMarksForLargeMap(mountedMarks, selectedMark);
         renderedMarkUids.clear();
-        canvas.dataset.markCulling = "viewport";
-        canvas.dataset.renderedMarkCount = "0";
-        canvas.dataset.totalMarkCount = String(marks.length);
+        renderedMarkViewportSignature = viewportSignature;
+        updateRenderedMarkCountDataset();
         return;
     }
 
-    marks.forEach((mark) => {
-        const shouldRender = (mark === selectedMark || markIsInsideBounds(mark, bounds))
-            && !shouldSuppressClusteredMarkDom(mark, renderMode, selectedMark);
+    if (viewportSignature === renderedMarkViewportSignature) {
+        return;
+    }
+    renderedMarkViewportSignature = viewportSignature;
 
-        if (shouldRender) {
-            positionMarkElement(mark);
-            mountMark(mark, fragment);
+    marksInBounds(bounds).forEach((mark) => {
+        if (!shouldSuppressClusteredMarkDom(mark, renderMode, selectedMark)) {
             nextRenderedMarkUids.add(mark.dataset.uid);
+        }
+    });
+
+    if (selectedMark && !shouldSuppressClusteredMarkDom(selectedMark, renderMode, selectedMark)) {
+        nextRenderedMarkUids.add(selectedMark.dataset.uid);
+    }
+
+    renderedMarkUids.forEach((uid) => {
+        if (nextRenderedMarkUids.has(uid)) {
             return;
         }
+        const mark = markByUid(uid);
+        if (mark) {
+            unmountMark(mark);
+        }
+    });
 
-        unmountMark(mark);
+    nextRenderedMarkUids.forEach((uid) => {
+        const mark = markByUid(uid);
+        if (!mark) {
+            return;
+        }
+        deferredMarkUnmountUids.delete(uid);
+        positionMarkElement(mark);
+        mountMark(mark, fragment);
     });
 
     if (fragment.childNodes.length > 0) {
@@ -2475,6 +2740,7 @@ function renderMarksForViewport(renderMode = canvas?.dataset.renderMode || "deta
 
 function clearRenderedMarkCache() {
     renderedMarkUids.clear();
+    renderedMarkViewportSignature = "";
     if (canvas) {
         delete canvas.dataset.renderedMarkCount;
         delete canvas.dataset.totalMarkCount;
@@ -2495,12 +2761,22 @@ function applyCanvasView(options = {}) {
 
     applyWorldGeometry();
     if (geometryDirty) {
-        positionAllMarks();
+        if (marks.length > largeMarkDomThreshold) {
+            renderedMarkUids.forEach((uid) => {
+                const mark = markByUid(uid);
+                if (mark) {
+                    positionMarkElement(mark);
+                }
+            });
+            positionPlacementMarker();
+        } else {
+            positionAllMarks();
+        }
         geometryDirty = false;
     }
-    canvas.style.setProperty("--canvas-pan-x", `${canvasView.panX}px`);
-    canvas.style.setProperty("--canvas-pan-y", `${canvasView.panY}px`);
-    canvas.style.setProperty("--canvas-zoom", String(canvasView.zoom));
+    setStylePropertyIfChanged(canvas, "--canvas-pan-x", `${canvasView.panX}px`);
+    setStylePropertyIfChanged(canvas, "--canvas-pan-y", `${canvasView.panY}px`);
+    setStylePropertyIfChanged(canvas, "--canvas-zoom", String(canvasView.zoom));
     canvas.classList.toggle("is-map-view", canvasView.zoom < mapModeZoom);
     const renderMode = canvasView.zoom < mapModeZoom
         ? "map"
@@ -2510,7 +2786,14 @@ function applyCanvasView(options = {}) {
     canvas.dataset.renderMode = renderMode;
     renderFogCanvas(renderMode);
     renderMapClusters();
+    if (renderMode !== "detail") {
+        scheduleClusterLayerIntegrityCheck();
+    }
     renderMarksForViewport(renderMode);
+    if (marks.length > largeMarkDomThreshold && renderMode !== "detail") {
+        startLargeMapMarkDomCleanup();
+        scheduleLargeClusteredMapUnmountRefresh();
+    }
     positionPlacementMarker();
     updateSelectedMarkPopout();
     updateZoomControls();
@@ -3258,7 +3541,7 @@ function markUid(mark) {
 }
 
 function markByUid(uid) {
-    return marks.find((item) => item.dataset.uid === uid) || null;
+    return marksByUid.get(uid) || null;
 }
 
 function focusMarkByUid(uid, markView = null) {
@@ -3790,7 +4073,7 @@ function apiMarkToView(mark) {
     };
 }
 
-function createMarkElement(mark) {
+function createMarkElement(mark, options = {}) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `mark-dot ${mark.shape}`;
@@ -3803,7 +4086,9 @@ function createMarkElement(mark) {
     button.dataset.created = mark.created;
     button.dataset.x = String(mark.x);
     button.dataset.y = String(mark.y);
-    positionMarkElement(button);
+    if (!options.deferPosition) {
+        positionMarkElement(button);
+    }
     button.setAttribute("aria-label", `View saved ${mark.shape} mark by ${mark.name}`);
     bindMark(button);
 
@@ -3843,7 +4128,9 @@ function removeMarkElement(mark) {
 
     const wasSelected = mark.dataset.selected === "true";
     marks = marks.filter((item) => item !== mark);
+    marksByUid.delete(mark.dataset.uid);
     markPositions.delete(mark.dataset.uid);
+    markSpatialIndexDirty = true;
     renderedMarkUids.delete(mark.dataset.uid);
     mark.remove();
     markCollectionChanged();
@@ -3862,7 +4149,7 @@ function removeMarkElement(mark) {
 }
 
 function addOrUpdateMark(mark, select = false, options = {}) {
-    const existing = marks.find((item) => item.dataset.uid === mark.uid);
+    const existing = marksByUid.get(mark.uid);
     if (existing) {
         existing.className = `mark-dot ${mark.shape}`;
         existing.dataset.name = mark.name;
@@ -3878,8 +4165,12 @@ function addOrUpdateMark(mark, select = false, options = {}) {
         existing.dataset.y = String(mark.y);
         existing.style.setProperty("--mark-color", mark.color);
         cacheMarkPosition(existing);
-        positionMarkElement(existing);
-        markCollectionChanged();
+        if (!options.deferPosition) {
+            positionMarkElement(existing);
+        }
+        if (!options.deferCollectionChanged) {
+            markCollectionChanged();
+        }
         if (!options.deferLayout) {
             expandWorldForMarks();
         }
@@ -3889,10 +4180,13 @@ function addOrUpdateMark(mark, select = false, options = {}) {
         return existing;
     }
 
-    const element = createMarkElement(mark);
+    const element = createMarkElement(mark, { deferPosition: options.deferPosition });
     marks.push(element);
+    marksByUid.set(element.dataset.uid, element);
     cacheMarkPosition(element);
-    markCollectionChanged();
+    if (!options.deferCollectionChanged) {
+        markCollectionChanged();
+    }
     const tileX = Math.floor(Number.parseFloat(mark.x ?? "0") / tileSize);
     const tileY = Math.floor(Number.parseFloat(mark.y ?? "0") / tileSize);
     revealExploredNeighbors(tileX, tileY);
@@ -4059,13 +4353,17 @@ function removeMissingMarks(markUids, options = {}) {
             selectedMarkElement = null;
         }
         mark.remove();
+        marksByUid.delete(mark.dataset.uid);
         markPositions.delete(mark.dataset.uid);
+        markSpatialIndexDirty = true;
         renderedMarkUids.delete(mark.dataset.uid);
         return false;
     });
 
     if (marks.length !== originalCount) {
-        markCollectionChanged();
+        if (!options.deferCollectionChanged) {
+            markCollectionChanged();
+        }
         if (!options.deferLayout) {
             rebuildWorldForCurrentMarks();
         }
@@ -4405,9 +4703,12 @@ function syncMarks(payload) {
     clusterDataVersion += 1;
     invalidateClusterHierarchy();
     invalidateClusterState();
-    markItems.forEach((mark) => addOrUpdateMark(mark, false, { deferLayout: true }));
-    removeMissingMarks(payload.mark_uids, { deferLayout: true });
+    markItems.forEach((mark) => addOrUpdateMark(mark, false, { deferLayout: true, deferCollectionChanged: true, deferPosition: true }));
+    removeMissingMarks(payload.mark_uids, { deferLayout: true, deferCollectionChanged: true });
+    markCollectionChanged();
+    rebuildMarksByUid();
     rebuildMarkPositionCache();
+    rebuildMarkSpatialIndex();
     rebuildWorldForCurrentMarks();
     renderRecent(recentMarks);
     updateCounts(payload.count);
@@ -4487,6 +4788,7 @@ function startLiveUpdates() {
 
 marks.forEach(bindMark);
 rebuildMarkPositionCache();
+rebuildMarkSpatialIndex();
 const initialSelectedMark = marks.find((mark) => mark.dataset.selected === "true");
 if (initialSelectedMark) {
     selectMark(initialSelectedMark, { showPopout: false });
@@ -4962,7 +5264,7 @@ if (undoButton && formStatus) {
             return;
         }
 
-        const targetMark = marks.find((mark) => mark.dataset.uid === targetUid);
+        const targetMark = markByUid(targetUid);
         setUndoMarkAvailable(false);
         formStatus.classList.remove("error");
         formStatus.textContent = "Returning to your latest mark...";
