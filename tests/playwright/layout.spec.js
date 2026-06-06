@@ -2080,6 +2080,9 @@ test.describe("responsive app layout", () => {
     await page.locator("[data-recent-list] [data-recent-uid^='same-recent-away-']").click();
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Same Recent Away", { timeout: 9000 });
     await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "full", { timeout: 9000 });
+    await expect.poll(async () => page.locator("[data-canvas-world]").evaluate((world) => (
+      new DOMMatrixReadOnly(getComputedStyle(world).transform).a
+    ))).toBeCloseTo(1.35, 2);
 
     const fitZoom = await page.locator("[data-mark-canvas]").evaluate(() => {
       const canvasElement = document.querySelector("[data-mark-canvas]");
@@ -2107,6 +2110,10 @@ test.describe("responsive app layout", () => {
       };
       sample();
     });
+    await expect(page.locator("[data-mark-popout]")).toHaveAttribute("data-state", "compact", { timeout: 3000 });
+    await expect.poll(async () => page.locator("[data-canvas-world]").evaluate((world) => (
+      new DOMMatrixReadOnly(getComputedStyle(world).transform).a
+    ))).toBeCloseTo(1.2, 2);
 
     await page.locator("[data-recent-list] [data-recent-uid^='same-recent-away-']").click();
     await page.waitForTimeout(4300);

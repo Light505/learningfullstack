@@ -1284,7 +1284,6 @@ function currentClusters() {
         const levelIndex = clusterLevelIndex();
         clusterCacheSignature = signature;
 
-        const items = markClusterItemsForDrilldown();
         const hierarchy = fullClusterHierarchy();
 
         let result = null;
@@ -1294,7 +1293,7 @@ function currentClusters() {
                 break;
             }
         }
-        clusterCache = result || items.map((item) => makeClusterNode([item], "mark"));
+        clusterCache = result || markClusterItemsForDrilldown().map((item) => makeClusterNode([item], "mark"));
     }
 
     return clusterCache;
