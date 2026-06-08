@@ -214,6 +214,8 @@ let clusterCache = [];
 let clusterCacheSignature = "";
 let clusterHierarchyCache = null;
 let clusterHierarchySignature = "";
+let clusterItemsCache = null;
+let clusterItemsCacheVersion = -1;
 let persistedClusters = [];
 let persistedClusterMemberships = [];
 let hasPersistedClusterPayload = false;
@@ -242,6 +244,7 @@ const deferredMarkUnmountUids = new Set();
 let coalescingCleanupTimer = null;
 let expandingCleanupTimer = null;
 let clusteredMarkCount = 0;
+let clusteredMarkUids = new Set();
 const coalescingCleanupMarks = new Set();
 const expandingCleanupMarks = new Set();
 let canvasHintTimer = null;
@@ -1063,7 +1066,12 @@ function markToClusterItem(mark) {
 }
 
 function markClusterItems() {
-    return marks.map(markToClusterItem).filter(Boolean);
+    if (clusterItemsCache !== null && clusterItemsCacheVersion === marksVersion) {
+        return clusterItemsCache;
+    }
+    clusterItemsCache = marks.map(markToClusterItem).filter(Boolean);
+    clusterItemsCacheVersion = marksVersion;
+    return clusterItemsCache;
 }
 
 function markClusterItemsForDrilldown() {
@@ -1149,7 +1157,7 @@ function groupRawItemsByRadius(items, radius) {
     const cell = radius || 1;
     const radiusSquared = cell * cell;
     const grid = new Map();
-    const cellKey = (cx, cy) => `${cx},${cy}`;
+    const cellKey = (cx, cy) => (cx + 500000) * 1000000 + (cy + 500000);
     const indexedItems = items.map((item, index) => ({ item, index }));
 
     indexedItems.forEach((entry) => {
@@ -1946,6 +1954,7 @@ function renderMapClusters() {
             });
         });
         clusteredMarkCount = coveredUids.size;
+        clusteredMarkUids = coveredUids;
 
         if (transition) {
             marks.forEach((mark) => {
@@ -2379,7 +2388,7 @@ function rebuildMarkSpatialIndex() {
     markSpatialIndexDirty = false;
 }
 
-function marksInBounds(bounds) {
+function marksInBounds(bounds, skipUids) {
     if (markSpatialIndexDirty) {
         rebuildMarkSpatialIndex();
     }
@@ -2399,6 +2408,9 @@ function marksInBounds(bounds) {
             }
             bucket.forEach((mark) => {
                 const uid = mark.dataset.uid;
+                if (skipUids && skipUids.has(uid)) {
+                    return;
+                }
                 if (!seen.has(uid) && markIsInsideBounds(mark, bounds)) {
                     seen.add(uid);
                     result.push(mark);
@@ -2478,7 +2490,14 @@ function unmountMark(mark) {
 }
 
 function mountedMarkElements() {
-    return Array.from(document.querySelectorAll(".mark-dot"));
+    const result = [];
+    renderedMarkUids.forEach((uid) => {
+        const mark = markByUid(uid);
+        if (mark) {
+            result.push(mark);
+        }
+    });
+    return result;
 }
 
 function updateRenderedMarkCountDataset() {
@@ -2694,11 +2713,28 @@ function renderMarksForViewport(renderMode = canvas?.dataset.renderMode || "deta
     }
     renderedMarkViewportSignature = viewportSignature;
 
-    marksInBounds(bounds).forEach((mark) => {
+    const skipClustered = marks.length > largeMarkDomThreshold && renderMode !== "detail" && clusteredMarkUids.size > 0
+        ? clusteredMarkUids
+        : null;
+
+    marksInBounds(bounds, skipClustered).forEach((mark) => {
         if (!shouldSuppressClusteredMarkDom(mark, renderMode, selectedMark)) {
             nextRenderedMarkUids.add(mark.dataset.uid);
         }
     });
+
+    if (skipClustered) {
+        coalescingCleanupMarks.forEach((mark) => {
+            if (mark.dataset.uid) {
+                nextRenderedMarkUids.add(mark.dataset.uid);
+            }
+        });
+        expandingCleanupMarks.forEach((mark) => {
+            if (mark.dataset.uid) {
+                nextRenderedMarkUids.add(mark.dataset.uid);
+            }
+        });
+    }
 
     if (selectedMark && !shouldSuppressClusteredMarkDom(selectedMark, renderMode, selectedMark)) {
         nextRenderedMarkUids.add(selectedMark.dataset.uid);
@@ -2763,7 +2799,7 @@ function applyCanvasView(options = {}) {
         if (marks.length > largeMarkDomThreshold) {
             renderedMarkUids.forEach((uid) => {
                 const mark = markByUid(uid);
-                if (mark) {
+                if (mark && !shouldSuppressClusteredMarkDom(mark, canvas?.dataset.renderMode || "detail", selectedCanvasMark())) {
                     positionMarkElement(mark);
                 }
             });

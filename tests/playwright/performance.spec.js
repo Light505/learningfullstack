@@ -110,4 +110,49 @@ test.describe("large canvas performance safeguards", () => {
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveAttribute("data-name", "Perf 0", { timeout: 12000 });
     await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(1);
   });
+
+  test("20k bulk sync and map view keeps clustered marks unmounted", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+
+    const marks = makeBenchmarkMarks(20000);
+    const syncState = await page.evaluate((payload) => {
+      window.dispatchEvent(new CustomEvent("test:syncMarks", { detail: payload }));
+
+      return {
+        renderedMarkCount: Number.parseInt(document.querySelector("[data-mark-canvas]").dataset.renderedMarkCount || "0", 10),
+        totalMarkCount: Number.parseInt(document.querySelector("[data-mark-canvas]").dataset.totalMarkCount || "0", 10),
+        domMarks: document.querySelectorAll(".mark-dot").length,
+      };
+    }, {
+      ok: true,
+      count: marks.length,
+      marks,
+      recent_marks: [marks[0]],
+      mark_uids: marks.map((mark) => mark.uid),
+    });
+
+    expect(syncState.totalMarkCount).toBe(20000);
+    expect(syncState.domMarks).toBe(syncState.renderedMarkCount);
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator("[data-mark-canvas]")).toHaveClass(/is-map-view/, { timeout: 15000 });
+    await expect(page.locator(".map-cluster").first()).toBeVisible({ timeout: 15000 });
+
+    await page.waitForTimeout(12000);
+    await expect.poll(async () => page.evaluate(() => document.querySelectorAll(".mark-dot").length), { timeout: 15000 })
+      .toBeLessThan(20000);
+
+    const mapState = await page.evaluate(() => ({
+      renderedMarkCount: Number.parseInt(document.querySelector("[data-mark-canvas]").dataset.renderedMarkCount || "0", 10),
+      totalMarkCount: Number.parseInt(document.querySelector("[data-mark-canvas]").dataset.totalMarkCount || "0", 10),
+      domMarks: document.querySelectorAll(".mark-dot").length,
+      clusters: document.querySelectorAll(".map-cluster").length,
+    }));
+
+    expect(mapState.totalMarkCount).toBe(20000);
+    expect(mapState.clusters).toBeGreaterThan(0);
+    expect(mapState.domMarks).toBeLessThan(mapState.totalMarkCount);
+    expect(mapState.renderedMarkCount).toBe(mapState.domMarks);
+  });
 });
