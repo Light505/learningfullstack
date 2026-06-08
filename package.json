@@ -5,6 +5,7 @@
     "test:playwright:v5": "playwright test tests/playwright/v5-ui.spec.js --reporter=list",
     "test:playwright:v7": "playwright test tests/playwright/v7-drawing.spec.js --reporter=list",
     "test:playwright:layout": "playwright test tests/playwright/layout.spec.js --reporter=list",
+    "test:playwright:regression": "playwright test tests/playwright/regression.spec.js --reporter=list",
     "test:playwright": "playwright test tests/playwright --reporter=list --workers=1"
   },
   "devDependencies": {
