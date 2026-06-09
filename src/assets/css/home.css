@@ -288,6 +288,10 @@ textarea:disabled {
     cursor: grabbing;
 }
 
+.mark-canvas.is-panning .canvas-world {
+    will-change: transform;
+}
+
 .canvas-world {
     position: absolute;
     left: 0;
@@ -308,7 +312,7 @@ textarea:disabled {
         24px 24px,
         32px 32px,
         32px 32px;
-    transform: translate(var(--canvas-pan-x), var(--canvas-pan-y)) scale(var(--canvas-zoom));
+    transform: translate(0px, 0px) scale(1);
     transform-origin: 0 0;
     pointer-events: none;
 }
