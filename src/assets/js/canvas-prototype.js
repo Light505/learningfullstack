@@ -236,6 +236,10 @@ let clusterDataVersion = 0;
 let worldGeometryVersion = 0;
 let markSpatialIndexDirty = true;
 let deferredMarkRenderRefresh = null;
+let _cachedCanvasRect = null;
+let _lastZoomReadoutText = null;
+let _lastZoomOutDisabled = null;
+let _lastZoomInDisabled = null;
 let clusterLayerIntegrityTimer = null;
 let largeClusteredMapUnmountRefreshTimer = null;
 let deferredMarkUnmountFrame = null;
@@ -2171,7 +2175,7 @@ function positionAllMarks() {
 
 function positionPlacementMarker() {
     if (placementMarker && xField?.value && yField?.value) {
-        const rect = canvas.getBoundingClientRect();
+        const rect = _cachedCanvasRect || canvas.getBoundingClientRect();
         const x = Number.parseFloat(xField.value);
         const y = Number.parseFloat(yField.value);
         const screenX = canvasView.panX + ((x - worldBounds.minX) * canvasView.zoom);
@@ -2192,7 +2196,7 @@ function positionMarkPopout() {
         return;
     }
 
-    const rect = canvas.getBoundingClientRect();
+    const rect = _cachedCanvasRect || canvas.getBoundingClientRect();
     const anchor = selectedMarkPopoutAnchor(selectedMark);
     if (!anchor) {
         return;
@@ -2236,7 +2240,7 @@ function positionIsInsideCanvasViewport(position) {
         return false;
     }
 
-    const rect = canvas.getBoundingClientRect();
+    const rect = _cachedCanvasRect || canvas.getBoundingClientRect();
     return position.x >= 0
         && position.x <= rect.width
         && position.y >= 0
@@ -2790,6 +2794,7 @@ function applyCanvasView(options = {}) {
     if (!canvas) {
         return;
     }
+    _cachedCanvasRect = canvas.getBoundingClientRect();
     if (!options.deferClusterCommit) {
         commitClusterLevelForZoom(canvasView.zoom, { animate: options.animateClusterTransition !== false });
     }
@@ -2809,8 +2814,9 @@ function applyCanvasView(options = {}) {
         }
         geometryDirty = false;
     }
-    setStylePropertyIfChanged(canvas, "--canvas-pan-x", `${canvasView.panX}px`);
-    setStylePropertyIfChanged(canvas, "--canvas-pan-y", `${canvasView.panY}px`);
+    if (canvasWorld) {
+        canvasWorld.style.transform = `translate(${canvasView.panX}px, ${canvasView.panY}px) scale(${canvasView.zoom})`;
+    }
     setStylePropertyIfChanged(canvas, "--canvas-zoom", String(canvasView.zoom));
     canvas.classList.toggle("is-map-view", canvasView.zoom < mapModeZoom);
     const renderMode = canvasView.zoom < mapModeZoom
@@ -2832,6 +2838,7 @@ function applyCanvasView(options = {}) {
     positionPlacementMarker();
     updateSelectedMarkPopout();
     updateZoomControls();
+    _cachedCanvasRect = null;
 }
 
 function zoomLimits() {
@@ -2855,16 +2862,28 @@ function updateZoomControls() {
     const roundedZoom = Number(canvasView.zoom.toFixed(3));
 
     if (zoomReadout) {
-        zoomReadout.value = formatZoomPercent(canvasView.zoom);
-        zoomReadout.textContent = formatZoomPercent(canvasView.zoom);
+        const text = formatZoomPercent(canvasView.zoom);
+        if (text !== _lastZoomReadoutText) {
+            _lastZoomReadoutText = text;
+            zoomReadout.value = text;
+            zoomReadout.textContent = text;
+        }
     }
 
     if (zoomOutButton) {
-        zoomOutButton.disabled = roundedZoom <= Number(min.toFixed(3));
+        const disabled = roundedZoom <= Number(min.toFixed(3));
+        if (disabled !== _lastZoomOutDisabled) {
+            _lastZoomOutDisabled = disabled;
+            zoomOutButton.disabled = disabled;
+        }
     }
 
     if (zoomInButton) {
-        zoomInButton.disabled = roundedZoom >= Number(max.toFixed(3));
+        const disabled = roundedZoom >= Number(max.toFixed(3));
+        if (disabled !== _lastZoomInDisabled) {
+            _lastZoomInDisabled = disabled;
+            zoomInButton.disabled = disabled;
+        }
     }
 }
 
@@ -3173,7 +3192,7 @@ function fitWorldZoom() {
         return 1;
     }
 
-    const rect = canvas.getBoundingClientRect();
+    const rect = _cachedCanvasRect || canvas.getBoundingClientRect();
     const worldWidth = worldBounds.maxX - worldBounds.minX;
     const worldHeight = worldBounds.maxY - worldBounds.minY;
     const padding = 36;
@@ -3368,7 +3387,7 @@ function canvasPointFromEvent(event) {
 }
 
 function visibleWorldBounds() {
-    const rect = canvas.getBoundingClientRect();
+    const rect = _cachedCanvasRect || canvas.getBoundingClientRect();
     return {
         minX: Math.max(minCoordinate, worldBounds.minX + ((0 - canvasView.panX) / canvasView.zoom)),
         maxX: Math.min(maxCoordinate, worldBounds.minX + ((rect.width - canvasView.panX) / canvasView.zoom)),
