@@ -4729,7 +4729,7 @@ rebuildMarkSpatialIndex();
 const initialSelectedMark = marks.find((mark) => mark.dataset.selected === "true");
 if (initialSelectedMark) {
     selectMark(initialSelectedMark, { showPopout: false });
-} else if (marks.length === 0) {
+} else {
     setEmptyPreview();
 }
 

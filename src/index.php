@@ -45,7 +45,7 @@ $marks = array_map(function (array $mark, int $index): array {
 $entry_count = count($marks);
 $has_marks = $entry_count > 0;
 $can_undo = !empty($_SESSION['last_mark_uid']);
-$preview_mark = $marks[0] ?? [
+$preview_mark = [
     'name' => 'No mark selected',
     'message' => 'Choose an existing mark to preview it here.',
     'drawing' => '',
@@ -228,7 +228,7 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                                     data-x="<?= htmlspecialchars((string) $mark['x'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-y="<?= htmlspecialchars((string) $mark['y'], ENT_QUOTES, 'UTF-8') ?>"
                                     aria-label="View <?= htmlspecialchars($mark['tone'], ENT_QUOTES, 'UTF-8') ?> <?= htmlspecialchars($mark['shape'], ENT_QUOTES, 'UTF-8') ?> mark by <?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?>"
-                                    <?= $index === 0 ? 'data-selected="true"' : '' ?>
+
                                 ></button>
                             <?php endforeach; ?>
                         </div>
