@@ -575,3 +575,95 @@ test.describe("render mode and mark shape", () => {
     await expect(diamondMark).toHaveClass(/diamond/);
   });
 });
+
+test.describe("initial page load has no selected mark", () => {
+  test("no mark is selected on initial load and after refresh when marks exist", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        {
+          uid: `no-select-a-${now}`,
+          display_name: "No Select A",
+          message: "First mark.",
+          drawing: null,
+          x_percent: "0.00",
+          y_percent: "0.00",
+          color: "#d9826b",
+          shape: "circle",
+          created_at: "2026-05-29 14:00:00",
+        },
+        {
+          uid: `no-select-b-${now}`,
+          display_name: "No Select B",
+          message: "Second mark.",
+          drawing: null,
+          x_percent: "100.00",
+          y_percent: "100.00",
+          color: "#9fc5a8",
+          shape: "square",
+          created_at: "2026-05-29 14:01:00",
+        },
+      ];
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          mark_uids: marks.map((m) => m.uid),
+        },
+      }));
+    });
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(0);
+    await expect(page.locator("[data-preview-name]")).toHaveText("No mark selected");
+
+    await page.reload();
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        {
+          uid: `no-select-a-${now}`,
+          display_name: "No Select A",
+          message: "First mark.",
+          drawing: null,
+          x_percent: "0.00",
+          y_percent: "0.00",
+          color: "#d9826b",
+          shape: "circle",
+          created_at: "2026-05-29 14:00:00",
+        },
+        {
+          uid: `no-select-b-${now}`,
+          display_name: "No Select B",
+          message: "Second mark.",
+          drawing: null,
+          x_percent: "100.00",
+          y_percent: "100.00",
+          color: "#9fc5a8",
+          shape: "square",
+          created_at: "2026-05-29 14:01:00",
+        },
+      ];
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          mark_uids: marks.map((m) => m.uid),
+        },
+      }));
+    });
+
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(0);
+    await expect(page.locator("[data-preview-name]")).toHaveText("No mark selected");
+
+    await page.evaluate(() => {
+      const mark = document.querySelector(".mark-dot");
+      if (mark) mark.click();
+    });
+    await expect(page.locator(".mark-dot[data-selected='true']")).toHaveCount(1);
+    await expect(page.locator("[data-preview-name]")).not.toHaveText("No mark selected");
+  });
+});

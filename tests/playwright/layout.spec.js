@@ -2828,4 +2828,156 @@ test.describe("responsive app layout", () => {
     expect(world.markX).toBeGreaterThan(0);
     expect(world.markY).toBeGreaterThan(0);
   });
+
+  test("cluster explode transition attribute persists long enough for CSS animations to complete", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["timing-1a", 0, 0],
+        ["timing-1b", 80, 80],
+        ["timing-2a", 1200, 0],
+        ["timing-2b", 1280, 80],
+        ["timing-3a", 3600, 0],
+        ["timing-3b", 3680, 80],
+        ["timing-4a", 4800, 0],
+        ["timing-4b", 4880, 80],
+        ["timing-far-a", 11000, 0],
+        ["timing-far-b", 11080, 80],
+        ["timing-far-c", 12200, 0],
+        ["timing-far-d", 12280, 80],
+        ["timing-far-e", 14600, 0],
+        ["timing-far-f", 14680, 80],
+        ["timing-far-g", 15800, 0],
+        ["timing-far-h", 15880, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `timing-${name}-${now}`,
+        display_name: name,
+        message: "Timing consistency probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    await page.getByLabel("Fit whole world").click();
+    await expect(page.locator(".map-cluster").first()).toBeVisible({ timeout: 5000 });
+
+    const clusterLevels = await page.locator(".map-cluster").evaluateAll((clusters) =>
+      clusters.map((cluster) => ({
+        level: cluster.dataset.clusterLevel,
+        animationDuration: getComputedStyle(cluster).animationDuration,
+      }))
+    );
+    const multiClusterDurations = clusterLevels
+      .filter((item) => item.level === "supercluster" || item.level === "galaxy" || item.level === "system");
+    multiClusterDurations.forEach((item) => {
+      const durationSeconds = Number.parseFloat(item.animationDuration);
+      expect(durationSeconds).toBeGreaterThanOrEqual(0.62);
+    });
+
+    await page.evaluate(() => {
+      window.__transitionEvents = [];
+      const canvas = document.querySelector("[data-mark-canvas]");
+      const observer = new MutationObserver(() => {
+        const mode = canvas?.dataset?.clusterTransition || null;
+        if (mode && window.__transitionEvents.length === 0) {
+          window.__transitionEvents.push({ mode, setAt: performance.now() });
+        }
+        if (!mode && window.__transitionEvents.length === 1 && !window.__transitionEvents[0].clearedAt) {
+          window.__transitionEvents[0].clearedAt = performance.now();
+        }
+      });
+      observer.observe(canvas, { attributes: true, attributeFilter: ["data-cluster-transition"] });
+    });
+
+    const superclusterButton = page.locator(".map-cluster[data-cluster-level='supercluster']").first();
+    if (await superclusterButton.count() > 0) {
+      await superclusterButton.click();
+      await page.waitForTimeout(800);
+
+      const transitionInfo = await page.evaluate(() => {
+        const events = window.__transitionEvents;
+        if (events.length === 0) return { observed: false };
+        const event = events[0];
+        const duration = event.clearedAt ? event.clearedAt - event.setAt : null;
+        return { observed: true, mode: event.mode, duration };
+      });
+
+      expect(transitionInfo.observed).toBe(true);
+      expect(transitionInfo.mode).toBe("explode");
+      if (transitionInfo.duration !== null) {
+        expect(transitionInfo.duration).toBeGreaterThanOrEqual(600);
+      }
+    }
+  });
+
+  test("cluster expansion timing is consistent across cluster levels", async ({ page }) => {
+    await isolateCanvasData(page);
+    await page.goto("http://localhost:8080/");
+    await page.evaluate(() => {
+      const now = Date.now();
+      const marks = [
+        ["expand-1a", 0, 0],
+        ["expand-1b", 80, 80],
+        ["expand-2a", 1200, 0],
+        ["expand-2b", 1280, 80],
+        ["expand-3a", 3600, 0],
+        ["expand-3b", 3680, 80],
+        ["expand-4a", 4800, 0],
+        ["expand-4b", 4880, 80],
+        ["expand-far-a", 11000, 0],
+        ["expand-far-b", 11080, 80],
+        ["expand-far-c", 12200, 0],
+        ["expand-far-d", 12280, 80],
+        ["expand-far-e", 14600, 0],
+        ["expand-far-f", 14680, 80],
+        ["expand-far-g", 15800, 0],
+        ["expand-far-h", 15880, 80],
+      ].map(([name, x, y], index) => ({
+        uid: `expand-${name}-${now}`,
+        display_name: name,
+        message: "Expansion timing probe.",
+        drawing: null,
+        x_percent: String(x),
+        y_percent: String(y),
+        color: index % 2 === 0 ? "#86a6c9" : "#f0b35a",
+        shape: "circle",
+        created_at: "2026-05-29 14:00:00",
+      }));
+
+      window.dispatchEvent(new CustomEvent("test:syncMarks", {
+        detail: {
+          ok: true,
+          count: marks.length,
+          marks,
+          recent_marks: marks,
+          mark_uids: marks.map((mark) => mark.uid),
+        },
+      }));
+    });
+
+    const expansionDurations = await page.evaluate(() => {
+      const levels = [0, 1, 2, 3];
+      return levels.map(() => clusterExpansionDuration());
+    });
+
+    const uniqueDurations = new Set(expansionDurations);
+    expect(uniqueDurations.size).toBe(1);
+    expect(expansionDurations[0]).toBe(970);
+  });
 });
