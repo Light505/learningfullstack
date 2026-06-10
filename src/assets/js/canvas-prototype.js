@@ -1656,7 +1656,7 @@ function clusterContainsAnyUid(cluster, uidSet) {
     return cluster.marks.some((mark) => uidSet.has(mark.dataset.uid));
 }
 
-function setClusterTransitionMode(mode, duration = 560) {
+function setClusterTransitionMode(mode, duration = 620) {
     if (!canvas) {
         return;
     }
@@ -1683,11 +1683,11 @@ function clearClusterTransitionMode(mode = null) {
     }
 }
 
-function clusterExpansionDuration(levelIndex) {
-    return 760 + (Math.max(0, levelIndex) * 70);
+function clusterExpansionDuration() {
+    return 970;
 }
 
-function startClusterExpansionState(cluster, levelIndex, duration = clusterExpansionDuration(levelIndex)) {
+function startClusterExpansionState(cluster, levelIndex, duration = clusterExpansionDuration()) {
     activeClusterExpansion = {
         x: cluster.x,
         y: cluster.y,
@@ -1700,7 +1700,7 @@ function startClusterExpansionState(cluster, levelIndex, duration = clusterExpan
 function startClusterExpansion(cluster, expandsToMarks) {
     const currentLevelIdx = clusterLevelIndex();
     const levelWeight = Math.max(0, currentLevelIdx);
-    const duration = clusterExpansionDuration(currentLevelIdx);
+    const duration = clusterExpansionDuration();
     startClusterExpansionState(cluster, currentLevelIdx, duration);
 
     cluster.marks.forEach((mark) => {
@@ -1775,7 +1775,7 @@ function zoomIntoCluster(cluster, options = {}) {
     const timing = options.timing || manualClusterOpenTiming;
     const cameraDuration = timing.camera ?? manualClusterOpenTiming.camera;
     const settleDuration = timing.settle ?? manualClusterOpenTiming.settle;
-    const animationDuration = Math.max(clusterExpansionDuration(currentLevelIndex), cameraDuration + settleDuration);
+    const animationDuration = Math.max(clusterExpansionDuration(), cameraDuration + settleDuration);
     startClusterExpansionState(cluster, currentLevelIndex, animationDuration);
 
     const opensNeighborToMarks = cluster.level === "neighbor" || explosion.levelIndex >= clusterLevels.length;
@@ -1932,7 +1932,7 @@ function renderMapClusters() {
 
     if (transitionMode) {
         clearClusterTransitionMode();
-        setClusterTransitionMode(transitionMode, 560);
+        setClusterTransitionMode(transitionMode, 620);
     } else {
         clearClusterTransitionMode();
     }
