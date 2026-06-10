@@ -178,13 +178,14 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                         </div>
                     </div>
 
+                    <?php $canvas_limits = mark_limits(); ?>
                     <div
                         class="mark-canvas <?= $has_marks ? 'has-marks' : '' ?>"
                         aria-label="Canvas with saved marks"
                         data-mark-canvas
-                        data-min-distance="<?= htmlspecialchars((string) mark_limits()['min_distance_percent'], ENT_QUOTES, 'UTF-8') ?>"
-                        data-min-coordinate="<?= htmlspecialchars((string) mark_limits()['min_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
-                        data-max-coordinate="<?= htmlspecialchars((string) mark_limits()['max_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-min-distance="<?= htmlspecialchars((string) $canvas_limits['min_distance_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-min-coordinate="<?= htmlspecialchars((string) $canvas_limits['min_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-max-coordinate="<?= htmlspecialchars((string) $canvas_limits['max_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
                     >
                         <div class="canvas-hint" data-canvas-hint>
                             <div>

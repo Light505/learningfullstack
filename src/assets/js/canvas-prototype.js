@@ -261,14 +261,7 @@ const momentumConfig = {
     maxVelocity: 50,
 };
 let lastTap = { time: 0, x: 0, y: 0 };
-const doubleTapConfig = {
-    maxDelay: 300,
-    maxDistance: 20,
-};
 let pinchState = null;
-const pinchConfig = {
-    minDistance: 20,
-};
 
 function isTouchDevice() {
     return "ontouchstart" in window || navigator.maxTouchPoints > 0;
@@ -351,7 +344,7 @@ function updatePanMomentum(clientX, clientY, currentTime) {
 function applyPanMomentum() {
     cancelPanMomentum();
 
-    const { friction, minVelocity, maxVelocity, settleThreshold } = momentumConfig;
+    const { friction, minVelocity, maxVelocity } = momentumConfig;
     let velocityX = panMomentum.velocityX;
     let velocityY = panMomentum.velocityY;
 
@@ -379,26 +372,6 @@ function applyPanMomentum() {
     };
 
     panMomentumAnimation = window.requestAnimationFrame(step);
-}
-
-function isDoubleTap(event) {
-    const now = performance.now();
-    const timeDelta = now - lastTap.time;
-    if (timeDelta > doubleTapConfig.maxDelay) {
-        lastTap.time = now;
-        lastTap.x = event.clientX;
-        lastTap.y = event.clientY;
-        return false;
-    }
-    const dist = Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y);
-    if (dist > doubleTapConfig.maxDistance) {
-        lastTap.time = now;
-        lastTap.x = event.clientX;
-        lastTap.y = event.clientY;
-        return false;
-    }
-    lastTap.time = 0;
-    return true;
 }
 
 function getPinchStateFromTouches(touches) {
@@ -589,10 +562,6 @@ function zoomSnapStopItems() {
         .sort((a, b) => b.zoom - a.zoom);
 }
 
-function zoomSnapStops() {
-    return zoomSnapStopItems().map((stop) => stop.zoom);
-}
-
 function zoomSnapStopForZoom(zoom) {
     return zoomSnapStopItems().find((stop) => Math.abs(stop.zoom - zoom) < zoomSnapTolerance);
 }
@@ -699,14 +668,6 @@ function revealTileAndNeighbors(tileX, tileY) {
             }
         }
     }
-}
-
-function revealExploredNeighbors(tileX, tileY) {
-    revealTileAndNeighbors(tileX, tileY);
-}
-
-function commitTile(tileX, tileY) {
-    addExploredTile(`${tileX},${tileY}`);
 }
 
 function commitTileBandForCoordinate(x, y) {
@@ -858,10 +819,6 @@ function isTileInsideCoordinateBounds(tileX, tileY) {
         && tileTop >= minCoordinate
         && tileRight <= maxCoordinate
         && tileBottom <= maxCoordinate;
-}
-
-function isPlaceableTile(tileX, tileY) {
-    return exploredTiles.has(`${tileX},${tileY}`) && isTileInsideCoordinateBounds(tileX, tileY);
 }
 
 function randomCoordinateInExploredTiles() {
@@ -1095,17 +1052,6 @@ function viewportWorldBounds(margin = 0) {
     const vpMaxY = worldBounds.minY + ((rect.height - margin - canvasView.panY) / canvasView.zoom);
 
     return { minX: vpMinX, maxX: vpMaxX, minY: vpMinY, maxY: vpMaxY };
-}
-
-function isMarkInsideViewport(x, y) {
-    const margin = -tileSize;
-    const bounds = viewportWorldBounds(margin);
-    if (!bounds) {
-        return true;
-    }
-
-    return x >= bounds.minX && x <= bounds.maxX
-        && y >= bounds.minY && y <= bounds.maxY;
 }
 
 function averageLocation(items) {
@@ -1477,15 +1423,6 @@ function promoteChildClusters(children, parentLevel) {
     return { parents, carried };
 }
 
-function buildClusterHierarchy(items) {
-    return buildFullClusterHierarchy(items);
-}
-
-function groupItemsByRadius(items, radius) {
-    return groupRawItemsByRadius(items, radius)
-        .map((members) => makeClusterNode(members));
-}
-
 function itemsFromMarkElements(markElements) {
     return markElements
         .map((mark) => {
@@ -1504,11 +1441,6 @@ function makeEmptyHierarchy() {
     return [];
 }
 
-function clustersForLevelIndex(items, levelIndex) {
-    const hierarchy = buildClusterHierarchy(items);
-    return hierarchy[levelIndex] || items.map((item) => makeClusterNode([item], "mark"));
-}
-
 function structuralClustersForLevelIndex(items, levelIndex) {
     if (levelIndex >= clusterLevels.length) {
         return items.map((item) => makeClusterNode([item], "mark"));
@@ -1522,23 +1454,8 @@ function clusterItemsFromMarks(markElements) {
     return markElements.map(markToClusterItem).filter(Boolean);
 }
 
-function hasPersistedClusterData() {
-    return hasPersistedClusterPayload;
-}
-
 function clusterLevelKey(levelIndex) {
     return clusterLevels[levelIndex]?.key || null;
-}
-
-function persistedClusterSignature() {
-    return [
-        persistedClusters
-            .map((cluster) => `${cluster.uid}:${cluster.level}:${cluster.parent_uid || ""}:${cluster.anchor_mark_uid}:${cluster.centroid_x}:${cluster.centroid_y}:${cluster.member_count}`)
-            .join("|"),
-        persistedClusterMemberships
-            .map((membership) => `${membership.cluster_uid}:${membership.mark_uid}:${membership.level}`)
-            .join("|"),
-    ].join("::");
 }
 
 function persistedClusterMembers(clusterUid, levelKey, allowedUids = null) {
@@ -1712,26 +1629,6 @@ function averagePreviousChildClusterCenter(cluster, previousCenters = previousMa
         x: centers.reduce((total, center) => total + center.x, 0) / centers.length,
         y: centers.reduce((total, center) => total + center.y, 0) / centers.length,
     };
-}
-
-function structuralParentCenterForCluster(cluster, parentLevelIndex) {
-    if (parentLevelIndex < 0 || parentLevelIndex >= clusterLevels.length) {
-        return null;
-    }
-
-    const childUids = new Set(cluster.marks.map((mark) => mark.dataset.uid));
-    const parent = structuralClustersForLevelIndex(markClusterItems(), parentLevelIndex)
-        .find((candidate) => cluster.marks.every((mark) => (
-            candidate.level === clusterLevels[parentLevelIndex].key
-            &&
-            candidate.marks.some((candidateMark) => candidateMark.dataset.uid === mark.dataset.uid)
-        )));
-
-    if (!parent || !clusterContainsAnyUid(parent, childUids)) {
-        return null;
-    }
-
-    return { x: parent.x, y: parent.y };
 }
 
 function structuralParentCentersByUid(parentLevelIndex) {
@@ -3018,10 +2915,6 @@ function easeOutCubic(progress) {
     return 1 - Math.pow(1 - progress, 3);
 }
 
-function easeOutExpo(progress) {
-    return progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-}
-
 function easeOutElastic(progress) {
     const c4 = (2 * Math.PI) / 3;
     if (progress === 0) return 0;
@@ -3064,17 +2957,7 @@ function animateCanvasViewTo(nextView, duration = 520, options = {}) {
 
     cancelCanvasViewAnimation();
 
-    if (duration <= 0) {
-        canvasView = nextView;
-        commitClusterLevelForZoom(canvasView.zoom, { animate: options.animateClusterTransition !== false });
-        applyCanvasView({ ...options, deferClusterCommit: true });
-        if (options.onComplete) {
-            options.onComplete();
-        }
-        return;
-    }
-
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (duration <= 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         canvasView = nextView;
         commitClusterLevelForZoom(canvasView.zoom, { animate: options.animateClusterTransition !== false });
         applyCanvasView({ ...options, deferClusterCommit: true });
@@ -4243,7 +4126,7 @@ function addOrUpdateMark(mark, select = false, options = {}) {
     }
     const tileX = Math.floor(Number.parseFloat(mark.x ?? "0") / tileSize);
     const tileY = Math.floor(Number.parseFloat(mark.y ?? "0") / tileSize);
-    revealExploredNeighbors(tileX, tileY);
+    revealTileAndNeighbors(tileX, tileY);
     if (!options.deferLayout) {
         expandWorldForMarks();
     }
