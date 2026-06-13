@@ -63,6 +63,7 @@ scripts/                     Local check, smoke, and migration scripts
 tests/                       PHP and Playwright tests
 docker-compose.yml           Base web service
 docker-compose.override.yml  Local development services
+docker-compose.database.yml  VPS Docker MySQL override
 docker-compose.web.yml       VPS web stack
 ```
 

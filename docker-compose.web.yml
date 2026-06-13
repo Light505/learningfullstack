@@ -39,11 +39,11 @@ services:
       - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie.samesite=lax"
     environment:
       APP_DEBUG: ${APP_DEBUG:-false}
-      DB_HOST: ${DB_HOST}
+      DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-3306}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASS: ${DB_PASS}
+      DB_NAME: ${DB_NAME:-${MYSQL_DATABASE}}
+      DB_USER: ${DB_USER:-${MYSQL_USER}}
+      DB_PASS: ${DB_PASS:-${MYSQL_PASSWORD}}
     deploy:
       replicas: 3
     healthcheck:
@@ -77,10 +77,10 @@ services:
     ports:
       - "127.0.0.1:8081:80"
     environment:
-      PMA_HOST: ${DB_HOST}
+      PMA_HOST: ${DB_HOST:-db}
       PMA_PORT: ${DB_PORT:-3306}
-      PMA_USER: ${DB_USER}
-      PMA_PASSWORD: ${DB_PASS}
+      PMA_USER: ${DB_USER:-root}
+      PMA_PASSWORD: ${DB_PASS:-${MYSQL_ROOT_PASSWORD}}
     restart: "no"
 
 volumes:
