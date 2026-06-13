@@ -93,10 +93,20 @@ try {
 } catch (InvalidArgumentException $e) {
     http_response_code(422);
     echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+} catch (PDOException $e) {
+    error_log('Mark database error: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'error' => 'Error saving your mark. Please try again later.']);
 } catch (RuntimeException $e) {
-    $status = $e->getCode() === 429 ? 429 : 500;
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    if ($e->getCode() === 429) {
+        http_response_code(429);
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        exit;
+    }
+
+    error_log('Mark runtime error: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'error' => 'Error saving your mark. Please try again later.']);
 } catch (Throwable $e) {
     error_log('Mark save failed: ' . $e->getMessage());
     http_response_code(500);

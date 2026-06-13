@@ -70,6 +70,14 @@ $cases = [
         'input' => array_merge($valid, ['x_percent' => 103423.99]),
         'expected' => null,
     ],
+    'y position exact max is bounded' => [
+        'input' => array_merge($valid, ['y_percent' => 103424]),
+        'expected' => 'Mark Y position must be within the canvas bounds.',
+    ],
+    'y position below max is allowed' => [
+        'input' => array_merge($valid, ['y_percent' => 103423.99]),
+        'expected' => null,
+    ],
     'y position is bounded' => [
         'input' => array_merge($valid, ['y_percent' => -102400.5]),
         'expected' => 'Mark Y position must be within the canvas bounds.',
