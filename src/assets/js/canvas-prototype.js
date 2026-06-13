@@ -3338,7 +3338,7 @@ function tooCloseToExistingMarks(x, y, ignoredUid = "") {
 }
 
 function placementStateForPoint(x, y) {
-    if (x < minCoordinate || x > maxCoordinate || y < minCoordinate || y > maxCoordinate) {
+    if (x < minCoordinate || x >= maxCoordinate || y < minCoordinate || y >= maxCoordinate) {
         return "invalid";
     }
 
@@ -3377,7 +3377,7 @@ function rejectPlacement(message) {
 function setPlacement(x, y) {
     applyWorldGeometry();
 
-    if (x < minCoordinate || x > maxCoordinate || y < minCoordinate || y > maxCoordinate) {
+    if (x < minCoordinate || x >= maxCoordinate || y < minCoordinate || y >= maxCoordinate) {
         return rejectPlacement("Choose a spot inside the available canvas.");
     }
 
