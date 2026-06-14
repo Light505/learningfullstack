@@ -1,10 +1,10 @@
 # I was here
 
-A small PHP/MySQL web app where visitors leave a mark on a shared canvas.
+A PHP/MySQL canvas guestbook. Visitors choose an explored spot on a shared
+201x201 tile world and leave a name, message or drawing, color, and shape.
 
-Marks can include a display name, short message, optional drawing, color, shape,
-and canvas position. The app uses Docker for local development and production
-image builds.
+The app uses plain PHP, Apache, MySQL, CSS, browser JavaScript, Docker Compose,
+and Playwright.
 
 ## Quick Start
 
@@ -30,15 +30,17 @@ Normal local startup should stay:
 docker compose up -d
 ```
 
-Production uses a separate startup command on the web VPS:
+## App Behavior
 
-```bash
-cd /opt/learningfullstack
-docker compose -f docker-compose.web.yml up -d --remove-orphans
-```
+- Marks are saved in MySQL and loaded through `src/api/marks.php`.
+- Server-Sent Events in `src/api/marks-stream.php` keep browsers synced.
+- The canvas starts at tile `0,0`; saved marks reveal that tile and its eight
+  neighbors.
+- Unexplored but visible tiles are fogged and unavailable for placement.
+- Users can undo their latest mark in the current PHP session.
 
-Production phpMyAdmin is started only when needed with the `tools` profile. See
-[Deployment](docs/deployment.md).
+Production uses separate VPS startup commands and starts phpMyAdmin only when
+needed with the `tools` profile. See [Deployment](docs/deployment.md).
 
 ## Checks
 
@@ -50,6 +52,16 @@ Production phpMyAdmin is started only when needed with the `tools` profile. See
 npm run test:playwright
 ```
 
+Canvas benchmark:
+
+```powershell
+npm run benchmark:canvas
+npm run benchmark:canvas:quick
+```
+
+See [Canvas benchmarking](docs/benchmarking.md) for prerequisites, command
+options, output files, and performance budget guidance.
+
 ## Main Files
 
 ```text
@@ -60,6 +72,7 @@ scripts/                     Local check, smoke, and migration scripts
 tests/                       PHP and Playwright tests
 docker-compose.yml           Base web service
 docker-compose.override.yml  Local development services
+docker-compose.database.yml  VPS Docker MySQL override
 docker-compose.web.yml       VPS web stack
 ```
 
@@ -68,5 +81,5 @@ docker-compose.web.yml       VPS web stack
 - [Local development](docs/local-development.md)
 - [Deployment](docs/deployment.md)
 - [Roadmap](docs/roadmap.md)
-- [Handoff](docs/handoff.md)
 - [Moderation and safety](docs/moderation-safety.md)
+- [Canvas benchmarking](docs/benchmarking.md)

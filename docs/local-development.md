@@ -1,7 +1,5 @@
 # Local Development
 
-Use this on your Windows machine while building the app.
-
 ## Start
 
 ```powershell
@@ -25,32 +23,35 @@ docker compose up -d
 ```
 
 Do not pass a separate env file during normal local startup.
-
-Later, local secrets should move to Windows 11 user environment variables.
+Compose loads `docker-compose.override.yml` automatically for local development.
+That starts the web app, MySQL, and phpMyAdmin. Keep local secrets in `.env`,
+created from the example file.
 
 Production uses a different Compose file and should always be started from the
 web VPS with:
 
 ```bash
 cd /opt/learningfullstack
-docker compose -f docker-compose.web.yml up -d --remove-orphans
+docker compose --env-file .env -f docker-compose.web.yml -f docker-compose.database.yml up -d --remove-orphans
 ```
 
 ## Database
 
 Schema files live in `database/init.sql` and `database/migrations/`.
 
-Apply migrations after creating a fresh local database volume:
+Apply migrations after creating a fresh local database volume or pulling new
+migration files:
 
 ```powershell
 .\scripts\apply-migrations.ps1
 ```
 
-To reset the local database:
+Reset local database data:
 
 ```powershell
 docker compose down --remove-orphans -v
 docker compose up -d --build
+.\scripts\apply-migrations.ps1
 ```
 
 ## Checks
@@ -63,7 +64,7 @@ docker compose up -d --build
 npm run test:playwright
 ```
 
-## Image Publishing
+## Build And Push
 
 Log in to GHCR once:
 

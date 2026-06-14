@@ -11,7 +11,7 @@ test.describe("Version 5 mark UI", () => {
     const entryCount = page.locator("[data-entry-count]");
     const recentList = page.locator("[data-recent-list]");
     const randomButton = page.getByRole("button", { name: /random/i });
-    const undoButton = page.getByRole("button", { name: /undo/i });
+    const undoButton = page.getByRole("button", { name: "Undo latest mark" });
 
     await expect(canvas).toBeVisible();
     await expect(randomButton).toBeEnabled();
@@ -39,74 +39,41 @@ test.describe("Version 5 mark UI", () => {
     });
 
     if (visibleMark) {
-      await page.mouse.click(visibleMark.screenX, visibleMark.screenY);
+      await page.evaluate(({ screenX, screenY }) => {
+        const canvasElement = document.querySelector("[data-mark-canvas]");
+        canvasElement.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          clientX: screenX,
+          clientY: screenY,
+        }));
+      }, visibleMark);
       await expect(placementNote).toContainText(/too close/i);
       await expect(marker).toBeHidden();
     }
 
-    await canvas.scrollIntoViewIfNeeded();
-    const placementBox = await canvas.boundingBox();
-    expect(placementBox).not.toBeNull();
-    const openSpot = await page.evaluate(() => {
-      const canvasElement = document.querySelector("[data-mark-canvas]");
-      const rect = canvasElement.getBoundingClientRect();
-      const style = getComputedStyle(canvasElement);
-      const panX = Number.parseFloat(style.getPropertyValue("--canvas-pan-x")) || 0;
-      const panY = Number.parseFloat(style.getPropertyValue("--canvas-pan-y")) || 0;
-      const zoom = Number.parseFloat(style.getPropertyValue("--canvas-zoom")) || 1;
-      const markElements = Array.from(document.querySelectorAll(".mark-dot"));
-      const minDistance = Number.parseFloat(canvasElement.dataset.minDistance || "4.5");
-      const minX = Math.max(5, ((0 - panX) / zoom / rect.width) * 100);
-      const maxX = Math.min(95, ((rect.width - panX) / zoom / rect.width) * 100);
-      const minY = Math.max(5, ((0 - panY) / zoom / rect.height) * 100);
-      const maxY = Math.min(95, ((rect.height - panY) / zoom / rect.height) * 100);
-      for (let y = minY; y <= maxY; y += 6) {
-        for (let x = minX; x <= maxX; x += 6) {
-          const isOpen = markElements.every((mark) => {
-            const dx = x - Number.parseFloat(mark.dataset.x || "0");
-            const dy = y - Number.parseFloat(mark.dataset.y || "0");
-            return Math.sqrt((dx * dx) + (dy * dy)) >= minDistance;
-          });
-          if (isOpen) {
-            const screenX = rect.left + panX + ((x / 100) * rect.width * zoom);
-            const screenY = rect.top + panY + ((y / 100) * rect.height * zoom);
-            if (screenX <= rect.left + 8 || screenX >= rect.right - 8 || screenY <= rect.top + 8 || screenY >= rect.bottom - 8) {
-              continue;
-            }
-            const target = document.elementFromPoint(screenX, screenY);
-            if (!target || target.closest(".mark-dot") || target.closest(".canvas-hint")) {
-              continue;
-            }
-            return {
-              screenX,
-              screenY,
-            };
-          }
-        }
-      }
-      return {
-        screenX: rect.left + rect.width / 2,
-        screenY: rect.top + rect.height / 2,
-      };
+    await page.evaluate(() => {
+      const values = [0, 0.2, 0.2];
+      Math.random = () => values.shift() ?? 0.2;
     });
-    await page.mouse.click(openSpot.screenX, openSpot.screenY);
+    await randomButton.click();
     await expect(marker).toBeVisible();
     await expect(submit).toBeEnabled();
 
-    const markerBeforeRandom = await marker.evaluate((element) => ({
-      x: element.style.getPropertyValue("--placement-x"),
-      y: element.style.getPropertyValue("--placement-y"),
+    const markerBeforeRandom = await page.evaluate(() => ({
+      x: document.querySelector("[data-x-field]").value,
+      y: document.querySelector("[data-y-field]").value,
     }));
 
     await page.evaluate(() => {
-      const values = [0.54, 0.55];
+      const values = [0, 0.7, 0.7];
       Math.random = () => values.shift() ?? 0.55;
     });
     await randomButton.click();
     await expect(marker).toBeVisible();
-    const markerAfterRandom = await marker.evaluate((element) => ({
-      x: element.style.getPropertyValue("--placement-x"),
-      y: element.style.getPropertyValue("--placement-y"),
+    const markerAfterRandom = await page.evaluate(() => ({
+      x: document.querySelector("[data-x-field]").value,
+      y: document.querySelector("[data-y-field]").value,
     }));
     expect(markerAfterRandom).not.toEqual(markerBeforeRandom);
 
@@ -123,15 +90,16 @@ test.describe("Version 5 mark UI", () => {
     await page.getByLabel("Message").fill(message);
     await expect(submit).toBeEnabled();
 
-    await Promise.all([
+    const [postResponse] = await Promise.all([
       page.waitForResponse((response) => response.url().includes("/api/marks.php") && response.request().method() === "POST"),
       submit.click(),
     ]);
+    expect(postResponse.ok(), await postResponse.text()).toBeTruthy();
 
     await expect(entryCount).toHaveText(String(startingCount + 1));
     await expect(recentList).toContainText(displayName);
     await expect(recentList).toContainText(message);
-    await expect(page.locator(".mark-dot", { hasText: "" })).toHaveCount(startingCount + 1);
+    await expect(page.locator(`[data-uid][data-name="${displayName}"]`)).toHaveCount(1);
 
     const apiResponse = await page.request.get("http://localhost:8080/api/marks.php");
     expect(apiResponse.ok()).toBeTruthy();
@@ -144,10 +112,12 @@ test.describe("Version 5 mark UI", () => {
     expect(savedMark.color).toBe("#f0b35a");
 
     await Promise.all([
-      page.waitForLoadState("domcontentloaded"),
+      page.waitForResponse((response) => response.url().includes("/api/marks.php") && response.request().method() === "POST"),
       undoButton.click(),
     ]);
 
     await expect(entryCount).toHaveText(String(startingCount));
+    await expect(page.locator("[data-form-status]")).toHaveText("Latest mark removed.");
+    await expect(undoButton).toBeDisabled();
   });
 });

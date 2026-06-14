@@ -13,7 +13,7 @@ $marks = [];
 
 try {
     $pdo = create_pdo($config);
-    $saved_marks = all_marks($pdo);
+    $saved_marks = all_marks($pdo, null, false);
 
     $marks = array_map(function (array $mark): array {
         return [
@@ -21,6 +21,7 @@ try {
             'name' => $mark['display_name'],
             'message' => $mark['message'] ?? 'A quiet mark without words.',
             'drawing' => $mark['drawing'] ?? '',
+            'drawing_loaded' => array_key_exists('drawing', $mark),
             'x' => (float) $mark['x_percent'],
             'y' => (float) $mark['y_percent'],
             'color' => $mark['color'],
@@ -37,13 +38,14 @@ try {
 $marks = array_map(function (array $mark, int $index): array {
     $mark['uid'] = $mark['uid'] ?? 'sample-' . ($index + 1);
     $mark['drawing'] = $mark['drawing'] ?? '';
+    $mark['drawing_loaded'] = $mark['drawing_loaded'] ?? true;
     return $mark;
 }, $marks, array_keys($marks));
 
 $entry_count = count($marks);
 $has_marks = $entry_count > 0;
 $can_undo = !empty($_SESSION['last_mark_uid']);
-$preview_mark = $marks[0] ?? [
+$preview_mark = [
     'name' => 'No mark selected',
     'message' => 'Choose an existing mark to preview it here.',
     'drawing' => '',
@@ -57,8 +59,10 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>I was here</title>
+    <title>I was here.</title>
+    <link rel="stylesheet" href="/assets/lib/leaflet/leaflet.css">
     <link rel="stylesheet" href="/assets/css/home.css">
+    <script src="/assets/lib/leaflet/leaflet.js" defer></script>
     <script src="/assets/js/canvas-prototype.js" defer></script>
 </head>
 <body>
@@ -66,8 +70,8 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
         <section class="workspace" aria-labelledby="page-title">
             <header class="topbar">
                 <div>
-                    <p class="eyebrow">Digital cave wall</p>
-                    <h1 id="page-title">I was here</h1>
+                    <h1 id="page-title">I was here.</h1>
+                    <p class="page-subtitle">A modern equivalent of ancient caves.</p>
                 </div>
                 <div class="entry-count" aria-label="Current canvas entry count">
                     <span data-entry-count><?= $entry_count ?></span>
@@ -78,24 +82,35 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
             <div class="canvas-layout">
                 <section class="canvas-panel" aria-label="Canvas prototype">
                     <div class="canvas-toolbar" aria-label="Canvas tools preview">
-                        <button type="button" class="tool-button active" data-place-button>
-                            <svg aria-hidden="true" viewBox="0 0 24 24">
-                                <path d="M12 21s6-5.33 6-11a6 6 0 0 0-12 0c0 5.67 6 11 6 11Z"></path>
-                                <circle cx="12" cy="10" r="2"></circle>
-                            </svg>
-                            Place
-                        </button>
-                        <button type="button" class="tool-button" data-random-button>
-                            <svg aria-hidden="true" viewBox="0 0 24 24">
-                                <path d="M16 3h5v5"></path>
-                                <path d="M4 20 21 3"></path>
-                                <path d="M21 16v5h-5"></path>
-                                <path d="M15 15 21 21"></path>
-                                <path d="M4 4l5 5"></path>
-                            </svg>
-                            Random
-                        </button>
-                        <div class="zoom-controls" aria-label="Canvas zoom controls">
+                        <div class="toolbar-section placement-tools" aria-label="Placement tools">
+                            <button type="button" class="tool-button active" data-place-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M12 21s6-5.33 6-11a6 6 0 0 0-12 0c0 5.67 6 11 6 11Z"></path>
+                                    <circle cx="12" cy="10" r="2"></circle>
+                                </svg>
+                                Place
+                            </button>
+                            <button type="button" class="tool-button" data-random-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M16 3h5v5"></path>
+                                    <path d="M4 20 21 3"></path>
+                                    <path d="M21 16v5h-5"></path>
+                                    <path d="M15 15 21 21"></path>
+                                    <path d="M4 4l5 5"></path>
+                                </svg>
+                                Random
+                            </button>
+                        </div>
+                        <div class="toolbar-section zoom-controls" aria-label="Canvas view controls">
+                            <button type="button" class="icon-button" aria-label="Zoom in" data-zoom-in-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <circle cx="11" cy="11" r="7"></circle>
+                                    <path d="M11 8v6"></path>
+                                    <path d="M8 11h6"></path>
+                                    <path d="m16 16 5 5"></path>
+                                </svg>
+                            </button>
+                            <output class="zoom-readout" aria-label="Canvas zoom level" data-zoom-readout>100%</output>
                             <button type="button" class="icon-button" aria-label="Zoom out" data-zoom-out-button>
                                 <svg aria-hidden="true" viewBox="0 0 24 24">
                                     <circle cx="11" cy="11" r="7"></circle>
@@ -109,57 +124,73 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                                     <path d="M3 3v6h6"></path>
                                 </svg>
                             </button>
-                            <button type="button" class="icon-button" aria-label="Zoom in" data-zoom-in-button>
+                            <button type="button" class="icon-button" aria-label="Fit whole world" data-fit-world-button>
                                 <svg aria-hidden="true" viewBox="0 0 24 24">
-                                    <circle cx="11" cy="11" r="7"></circle>
-                                    <path d="M11 8v6"></path>
-                                    <path d="M8 11h6"></path>
-                                    <path d="m16 16 5 5"></path>
+                                    <path d="M3 9V3h6"></path>
+                                    <path d="M21 9V3h-6"></path>
+                                    <path d="M3 15v6h6"></path>
+                                    <path d="M21 15v6h-6"></path>
+                                    <path d="M8 8h8v8H8z"></path>
+                                </svg>
+                            </button>
+                            <button
+                                type="button"
+                                class="icon-button"
+                                aria-label="Focus latest mark"
+                                data-focus-latest-button
+                                <?= $has_marks ? '' : 'disabled' ?>
+                            >
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                    <path d="M12 2v4"></path>
+                                    <path d="M12 18v4"></path>
+                                    <path d="M2 12h4"></path>
+                                    <path d="M18 12h4"></path>
                                 </svg>
                             </button>
                         </div>
-                        <button
-                            type="button"
-                            class="icon-button"
-                            aria-label="Focus latest mark"
-                            data-focus-latest-button
-                            <?= $has_marks ? '' : 'disabled' ?>
-                        >
-                            <svg aria-hidden="true" viewBox="0 0 24 24">
-                                <circle cx="12" cy="12" r="3"></circle>
-                                <path d="M12 2v4"></path>
-                                <path d="M12 18v4"></path>
-                                <path d="M2 12h4"></path>
-                                <path d="M18 12h4"></path>
-                            </svg>
-                        </button>
-                        <button
-                            type="button"
-                            class="icon-button"
-                            aria-label="Undo latest mark"
-                            data-undo-button
-                            data-csrf-token="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>"
-                            <?= $can_undo ? '' : 'disabled' ?>
-                        >
-                            <svg aria-hidden="true" viewBox="0 0 24 24">
-                                <path d="M9 14 4 9l5-5"></path>
-                                <path d="M4 9h11a5 5 0 0 1 0 10h-4"></path>
-                            </svg>
-                        </button>
+                        <div class="toolbar-section export-tools" aria-label="World export" hidden>
+                            <button type="button" class="tool-button" aria-label="Export whole world" data-export-world-button>
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M12 3v12"></path>
+                                    <path d="m7 10 5 5 5-5"></path>
+                                    <path d="M5 21h14"></path>
+                                </svg>
+                                Export
+                            </button>
+                        </div>
+                        <div class="toolbar-section undo-tools" aria-label="Undo latest placed mark">
+                            <button
+                                type="button"
+                                class="tool-button warning"
+                                aria-label="Undo latest mark"
+                                data-undo-button
+                                data-csrf-token="<?= htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') ?>"
+                                data-last-mark-uid="<?= htmlspecialchars($_SESSION['last_mark_uid'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
+                                <?= $can_undo ? '' : 'disabled' ?>
+                            >
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M9 14 4 9l5-5"></path>
+                                    <path d="M4 9h11a5 5 0 0 1 0 10h-4"></path>
+                                </svg>
+                                Undo latest mark
+                            </button>
+                        </div>
                     </div>
 
+                    <?php $canvas_limits = mark_limits(); ?>
                     <div
                         class="mark-canvas <?= $has_marks ? 'has-marks' : '' ?>"
                         aria-label="Canvas with saved marks"
                         data-mark-canvas
-                        data-min-distance="<?= htmlspecialchars((string) mark_limits()['min_distance_percent'], ENT_QUOTES, 'UTF-8') ?>"
-                        data-min-coordinate="<?= htmlspecialchars((string) mark_limits()['min_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
-                        data-max-coordinate="<?= htmlspecialchars((string) mark_limits()['max_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-min-distance="<?= htmlspecialchars((string) $canvas_limits['min_distance_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-min-coordinate="<?= htmlspecialchars((string) $canvas_limits['min_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
+                        data-max-coordinate="<?= htmlspecialchars((string) $canvas_limits['max_coordinate_percent'], ENT_QUOTES, 'UTF-8') ?>"
                     >
                         <div class="canvas-hint" data-canvas-hint>
                             <div>
-                                <strong>A quiet wall for small proof.</strong>
-                                <span>Each mark keeps a little breathing room for whoever arrives next.</span>
+                                <strong>Move through the wall.</strong>
+                                <span>Drag the wall, hold Space while dragging, or use the view controls above.</span>
                             </div>
                             <button type="button" aria-label="Hide canvas note" data-hide-canvas-hint>
                                 <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -176,6 +207,8 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
 
                         <div class="canvas-world" data-canvas-world>
                             <div class="canvas-tiles" data-canvas-tiles aria-hidden="true"></div>
+                            <canvas class="canvas-fog" data-fog-canvas aria-hidden="true"></canvas>
+                            <div class="map-clusters" data-map-clusters aria-label="Clustered marks"></div>
 
                             <?php foreach ($marks as $index => $mark): ?>
                                 <button
@@ -190,28 +223,29 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                                     data-name="<?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-message="<?= htmlspecialchars($mark['message'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-drawing="<?= htmlspecialchars($mark['drawing'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-drawing-loaded="<?= $mark['drawing_loaded'] ? 'true' : 'false' ?>"
                                     data-created="<?= htmlspecialchars($mark['created'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-x="<?= htmlspecialchars((string) $mark['x'], ENT_QUOTES, 'UTF-8') ?>"
                                     data-y="<?= htmlspecialchars((string) $mark['y'], ENT_QUOTES, 'UTF-8') ?>"
                                     aria-label="View <?= htmlspecialchars($mark['tone'], ENT_QUOTES, 'UTF-8') ?> <?= htmlspecialchars($mark['shape'], ENT_QUOTES, 'UTF-8') ?> mark by <?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?>"
-                                    <?= $index === 0 ? 'data-selected="true"' : '' ?>
+
                                 ></button>
                             <?php endforeach; ?>
                         </div>
                         <div class="placement-marker" data-placement-marker hidden aria-hidden="true"></div>
+                        <div class="mark-popout" data-mark-popout hidden>
+                            <div class="preview-chip" data-preview-chip style="background: <?= htmlspecialchars($preview_mark['color'], ENT_QUOTES, 'UTF-8') ?>" aria-hidden="true"></div>
+                            <div class="mark-popout-body">
+                                <h2 data-preview-name><?= htmlspecialchars($preview_mark['name'], ENT_QUOTES, 'UTF-8') ?></h2>
+                                <p data-preview-message><?= htmlspecialchars($preview_mark['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                                <div class="preview-drawing" data-preview-drawing hidden aria-label="Selected mark drawing"></div>
+                                <small data-preview-created><?= htmlspecialchars($preview_mark['created'], ENT_QUOTES, 'UTF-8') ?></small>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
                 <aside class="side-panel" aria-label="Mark preview and compose mockup">
-                    <section class="mark-preview <?= $has_marks ? '' : 'is-empty' ?>">
-                        <p class="panel-label">Selected mark</p>
-                        <div class="preview-chip" style="background: <?= htmlspecialchars($preview_mark['color'], ENT_QUOTES, 'UTF-8') ?>" aria-hidden="true"></div>
-                        <h2 data-preview-name><?= htmlspecialchars($preview_mark['name'], ENT_QUOTES, 'UTF-8') ?></h2>
-                        <p data-preview-message><?= htmlspecialchars($preview_mark['message'], ENT_QUOTES, 'UTF-8') ?></p>
-                        <div class="preview-drawing" data-preview-drawing hidden aria-label="Selected mark drawing"></div>
-                        <small data-preview-created><?= htmlspecialchars($preview_mark['created'], ENT_QUOTES, 'UTF-8') ?></small>
-                    </section>
-
                     <section class="compose-preview">
                         <p class="panel-label">Leave a mark</p>
                         <form class="mark-form" data-mark-form>
@@ -220,28 +254,44 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                             <input type="hidden" name="y_percent" data-y-field value="">
                             <input type="hidden" name="drawing" data-drawing-field value="">
                             <label>
-                                Display name
-                                <input type="text" name="display_name" maxlength="80" placeholder="Future visitor" required>
+                                <span class="field-label-row">
+                                    <span>Display name</span>
+                                    <small><span data-count-for="display_name">0</span>/80</small>
+                                </span>
+                                <input type="text" name="display_name" maxlength="80" placeholder="Future visitor" required data-count-input="display_name">
                             </label>
                             <label>
-                                Short message
-                                <textarea name="message" maxlength="280" placeholder="I was here."></textarea>
+                                <span class="field-label-row">
+                                    <span>Short message</span>
+                                    <small><span data-count-for="message">0</span>/280</small>
+                                </span>
+                                <textarea name="message" maxlength="280" placeholder="I was here." data-count-input="message"></textarea>
                             </label>
                             <div class="drawing-tool">
                                 <div class="drawing-tool-header">
                                     <span>Drawing</span>
-                                    <button type="button" class="mini-button" data-drawing-clear>Clear</button>
+                                    <div class="drawing-actions" aria-label="Drawing controls">
+                                        <button type="button" class="mini-button active" data-drawing-pen>Draw</button>
+                                        <button type="button" class="mini-button" data-drawing-eraser>Erase</button>
+                                        <button type="button" class="mini-button" data-drawing-undo disabled>Undo</button>
+                                    </div>
                                 </div>
-                                <canvas
-                                    class="drawing-canvas"
-                                    width="240"
-                                    height="120"
-                                    data-drawing-canvas
-                                    aria-label="Optional drawing pad"
-                                ></canvas>
+                                <div class="drawing-pad">
+                                    <canvas
+                                        class="drawing-canvas"
+                                        width="240"
+                                        height="120"
+                                        data-drawing-canvas
+                                        aria-label="Optional drawing pad"
+                                    ></canvas>
+                                    <span class="drawing-eraser-indicator" data-drawing-eraser-indicator hidden></span>
+                                </div>
+                                <div class="drawing-clear-row">
+                                    <button type="button" class="mini-button danger" data-drawing-clear>Clear drawing</button>
+                                </div>
                             </div>
                             <fieldset>
-                                <legend>Color</legend>
+                                <legend>Mark color</legend>
                                 <label class="swatch-option">
                                     <input type="radio" name="color" value="#d9826b" checked>
                                     <span class="swatch clay"></span>
@@ -288,7 +338,6 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                 <section class="recent-preview" aria-labelledby="recent-title">
                     <div class="section-heading">
                         <p class="panel-label">Recent marks</p>
-                        <span><span data-recent-total><?= $entry_count ?></span> total</span>
                     </div>
                     <ol id="recent-title" class="recent-list" aria-label="Recent marks" data-recent-list>
                         <?php if (count($recent_marks) === 0): ?>
@@ -297,7 +346,7 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
                         <?php foreach ($recent_marks as $mark): ?>
                             <li>
                                 <button type="button" class="recent-mark-button" data-recent-uid="<?= htmlspecialchars($mark['uid'], ENT_QUOTES, 'UTF-8') ?>">
-                                    <span class="recent-dot" style="--mark-color: <?= htmlspecialchars($mark['color'], ENT_QUOTES, 'UTF-8') ?>"></span>
+                                    <span class="recent-dot <?= htmlspecialchars($mark['shape'], ENT_QUOTES, 'UTF-8') ?>" style="--mark-color: <?= htmlspecialchars($mark['color'], ENT_QUOTES, 'UTF-8') ?>"></span>
                                     <span>
                                         <strong><?= htmlspecialchars($mark['name'], ENT_QUOTES, 'UTF-8') ?></strong>
                                         <p><?= htmlspecialchars($mark['message'], ENT_QUOTES, 'UTF-8') ?></p>

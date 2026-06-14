@@ -1,59 +1,24 @@
 # AGENTS.md
 
-## Project Context
+## Project
 
-This is a learning project for building production-ready websites with:
+`I was here` is a small PHP/Apache and MySQL canvas guestbook. Visitors place a
+mark on a shared 201x201 tile world, with optional message, drawing, color, and
+shape.
 
-- Docker for containerization and deployment.
-- Apache as the web server.
-- MySQL for database storage.
-- PHP for the application.
+## Work Rules
 
-Priorities are security, optimization, ease of deployment, continuous learning,
-and professional readiness.
+- Keep changes small, tested, and aligned with the existing PHP, plain JS, CSS,
+  Docker, and PowerShell script setup.
+- Do not add new frameworks or orchestration unless the current code needs it.
+- Never commit secrets. Use `.env` from the example files for local and VPS
+  configuration.
+- Keep VPS runtime files minimal: `.env` plus `docker-compose.web.yml` on the
+  web host, and schema files only where database setup is performed.
+- Before image pushes, run the checks listed in [README.md](README.md).
 
-## Current Deployment Direction
+## Useful Docs
 
-This project follows a small, verifiable VPS deployment path inspired by the
-Dreams of Code VPS guide. Use that guide as a reference for deployment ideas,
-not as a strict blueprint.
-
-Current pattern:
-
-- Work on `dev`.
-- Merge tested work into `main`.
-- Build the web image from `main` manually.
-- Push the image to `ghcr.io/light505/learningfullstack`.
-- Run only runtime deployment files on the VPS.
-- Use Docker Compose for the VPS stack.
-- Use Traefik for HTTPS and routing.
-- Use Watchtower to poll the `prod` image tag and restart the `web` containers.
-- Keep MySQL on a separate database VPS for the current documented direction.
-
-Intentional choices:
-
-- This app uses PHP/Apache and MySQL.
-- The production web stack can run three `web` replicas behind Traefik.
-- Watchtower is used for simple image updates while advanced orchestration is
-  deferred.
-- Secrets are managed with protected `.env` files for now.
-- Uptime monitoring belongs after the core deployment is stable.
-
-## Important Docs
-
-- [docs/deployment.md](docs/deployment.md) - VPS deployment steps.
-- [docs/local-development.md](docs/local-development.md) - local run, test, and image push workflow.
-- [docs/roadmap.md](docs/roadmap.md) - future app and operations ideas.
-- [docs/handoff.md](docs/handoff.md) - current app state and verification checklist.
-- [docs/moderation-safety.md](docs/moderation-safety.md) - current safety controls and future moderation plan.
-
-## Assistant Guidance
-
-When assisting with this project:
-
-- Explain concepts clearly.
-- Prefer small, verifiable steps.
-- Avoid advanced orchestration until the current phase is stable.
-- Keep the web VPS deployment folder minimal: `.env` and `docker-compose.web.yml`.
-- Keep the database VPS deployment folder minimal: `.env` and `database/migrations/`.
-- Never put secrets directly in Git-tracked files.
+- [README.md](README.md): quick start, checks, and app map.
+- [docs/deployment.md](docs/deployment.md): GHCR and VPS deployment.
+- [docs/roadmap.md](docs/roadmap.md): active next work.

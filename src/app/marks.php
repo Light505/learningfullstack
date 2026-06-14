@@ -5,14 +5,73 @@ function mark_limits(): array
     return [
         'max_display_name' => 80,
         'max_message' => 280,
-        'max_drawing_bytes' => 12000,
-        'max_drawing_strokes' => 20,
-        'max_drawing_points' => 500,
+        'max_drawing_bytes' => 128000,
+        'max_drawing_strokes' => 128,
+        'max_drawing_points' => 8192,
         'allowed_shapes' => ['circle', 'square', 'diamond'],
-        'min_distance_percent' => 4.5,
-        'min_coordinate_percent' => -300,
-        'max_coordinate_percent' => 300,
+        'min_distance_percent' => 46.08,
+        'min_coordinate_percent' => -102400,
+        'max_coordinate_percent' => 103424,
     ];
+}
+
+function mark_tile_size(): int
+{
+    return 1024;
+}
+
+function mark_tile_index_for_coordinate(float $coordinate): int
+{
+    return (int) floor($coordinate / mark_tile_size());
+}
+
+function mark_tile_bounds(array $limits): array
+{
+    return [
+        'min' => mark_tile_index_for_coordinate((float) $limits['min_coordinate_percent']),
+        'max' => mark_tile_index_for_coordinate((float) $limits['max_coordinate_percent']) - 1,
+    ];
+}
+
+function mark_tile_key(int $tile_x, int $tile_y): string
+{
+    return $tile_x . ',' . $tile_y;
+}
+
+function explored_tile_keys_for_marks(array $marks, array $limits): array
+{
+    $bounds = mark_tile_bounds($limits);
+    $explored = [mark_tile_key(0, 0) => true];
+
+    foreach ($marks as $mark) {
+        if (!isset($mark['x_percent'], $mark['y_percent']) || !is_numeric($mark['x_percent']) || !is_numeric($mark['y_percent'])) {
+            continue;
+        }
+
+        $tile_x = mark_tile_index_for_coordinate((float) $mark['x_percent']);
+        $tile_y = mark_tile_index_for_coordinate((float) $mark['y_percent']);
+
+        for ($dx = -1; $dx <= 1; $dx++) {
+            for ($dy = -1; $dy <= 1; $dy++) {
+                $neighbor_x = $tile_x + $dx;
+                $neighbor_y = $tile_y + $dy;
+                if ($neighbor_x >= $bounds['min'] && $neighbor_x <= $bounds['max'] && $neighbor_y >= $bounds['min'] && $neighbor_y <= $bounds['max']) {
+                    $explored[mark_tile_key($neighbor_x, $neighbor_y)] = true;
+                }
+            }
+        }
+    }
+
+    return $explored;
+}
+
+function mark_coordinate_is_explored(float $x_percent, float $y_percent, array $marks, array $limits): bool
+{
+    $tile_x = mark_tile_index_for_coordinate($x_percent);
+    $tile_y = mark_tile_index_for_coordinate($y_percent);
+    $explored = explored_tile_keys_for_marks($marks, $limits);
+
+    return isset($explored[mark_tile_key($tile_x, $tile_y)]);
 }
 
 function normalize_mark_input(array $input): array
@@ -78,11 +137,11 @@ function validate_mark(array $input, array $limits): ?string
         return $drawing_error;
     }
 
-    if (!is_numeric($x_percent) || (float) $x_percent < $limits['min_coordinate_percent'] || (float) $x_percent > $limits['max_coordinate_percent']) {
+    if (!is_numeric($x_percent) || (float) $x_percent < $limits['min_coordinate_percent'] || (float) $x_percent >= $limits['max_coordinate_percent']) {
         return 'Mark X position must be within the canvas bounds.';
     }
 
-    if (!is_numeric($y_percent) || (float) $y_percent < $limits['min_coordinate_percent'] || (float) $y_percent > $limits['max_coordinate_percent']) {
+    if (!is_numeric($y_percent) || (float) $y_percent < $limits['min_coordinate_percent'] || (float) $y_percent >= $limits['max_coordinate_percent']) {
         return 'Mark Y position must be within the canvas bounds.';
     }
 
@@ -103,7 +162,7 @@ function validate_drawing(string $drawing, array $limits): ?string
         return null;
     }
 
-    if (strlen($drawing) > $limits['max_drawing_bytes']) {
+    if ($limits['max_drawing_bytes'] !== null && strlen($drawing) > $limits['max_drawing_bytes']) {
         return 'Drawing is too large. Please keep it simple.';
     }
 
@@ -112,7 +171,7 @@ function validate_drawing(string $drawing, array $limits): ?string
         return 'Drawing data is invalid.';
     }
 
-    if (count($payload['strokes']) > $limits['max_drawing_strokes']) {
+    if ($limits['max_drawing_strokes'] !== null && count($payload['strokes']) > $limits['max_drawing_strokes']) {
         return 'Drawing has too many strokes. Please keep it simple.';
     }
 
@@ -123,12 +182,20 @@ function validate_drawing(string $drawing, array $limits): ?string
         }
 
         foreach ($stroke as $point) {
-            if (!is_array($point) || !isset($point['x'], $point['y']) || !is_numeric($point['x']) || !is_numeric($point['y'])) {
+            if (!is_array($point)) {
                 return 'Drawing data is invalid.';
             }
 
-            $x = (float) $point['x'];
-            $y = (float) $point['y'];
+            $uses_numeric_points = array_key_exists(0, $point) || array_key_exists(1, $point);
+            $x_value = $uses_numeric_points ? ($point[0] ?? null) : ($point['x'] ?? null);
+            $y_value = $uses_numeric_points ? ($point[1] ?? null) : ($point['y'] ?? null);
+
+            if (!is_numeric($x_value) || !is_numeric($y_value)) {
+                return 'Drawing data is invalid.';
+            }
+
+            $x = (float) $x_value;
+            $y = (float) $y_value;
             if ($x < 0 || $x > 100 || $y < 0 || $y > 100) {
                 return 'Drawing data is invalid.';
             }
@@ -137,7 +204,7 @@ function validate_drawing(string $drawing, array $limits): ?string
         }
     }
 
-    if ($point_count > $limits['max_drawing_points']) {
+    if ($limits['max_drawing_points'] !== null && $point_count > $limits['max_drawing_points']) {
         return 'Drawing has too many points. Please keep it simple.';
     }
 
@@ -151,6 +218,10 @@ function save_mark(PDO $pdo, array $input): array
     $error = validate_mark($mark, $limits);
     if ($error !== null) {
         throw new InvalidArgumentException($error);
+    }
+
+    if (!mark_coordinate_is_explored((float) $mark['x_percent'], (float) $mark['y_percent'], all_mark_coordinates($pdo), $limits)) {
+        throw new InvalidArgumentException('Choose a spot inside the available canvas.');
     }
 
     if (!mark_position_available(
@@ -226,11 +297,18 @@ function delete_mark_by_uid(PDO $pdo, string $uid): bool
     return $stmt->rowCount() > 0;
 }
 
-function recent_marks(PDO $pdo, int $limit = 10): array
+function mark_select_fields(bool $include_drawing): string
+{
+    $fields = 'uid, x_percent, y_percent, display_name, message, color, shape, created_at';
+
+    return $include_drawing ? $fields . ', drawing' : $fields;
+}
+
+function recent_marks(PDO $pdo, int $limit = 10, bool $include_drawing = true): array
 {
     $limit = max(1, min($limit, 50));
     $stmt = $pdo->prepare(
-        "SELECT uid, x_percent, y_percent, display_name, message, drawing, color, shape, created_at
+        'SELECT ' . mark_select_fields($include_drawing) . "
         FROM marks
         ORDER BY created_at DESC, id DESC
         LIMIT $limit"
@@ -240,14 +318,18 @@ function recent_marks(PDO $pdo, int $limit = 10): array
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-function mark_uids(PDO $pdo, int $limit = 1000): array
+function mark_uids(PDO $pdo, ?int $limit = 1000): array
 {
-    $limit = max(1, min($limit, 1000));
+    $limit_clause = '';
+    if ($limit !== null) {
+        $limit = max(1, $limit);
+        $limit_clause = " LIMIT $limit";
+    }
+
     $stmt = $pdo->prepare(
         "SELECT uid
         FROM marks
-        ORDER BY created_at ASC, id ASC
-        LIMIT $limit"
+        ORDER BY created_at ASC, id ASC" . $limit_clause
     );
     $stmt->execute();
 
@@ -261,14 +343,26 @@ function count_marks(PDO $pdo): int
     return (int) $stmt->fetchColumn();
 }
 
-function all_marks(PDO $pdo, int $limit = 500): array
+function all_mark_coordinates(PDO $pdo): array
 {
-    $limit = max(1, min($limit, 1000));
+    $stmt = $pdo->query('SELECT x_percent, y_percent FROM marks');
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function all_marks(PDO $pdo, ?int $limit = 500, bool $include_drawing = true): array
+{
+    $limit_clause = '';
+    if ($limit !== null) {
+        $limit = max(1, $limit);
+        $limit_clause = " LIMIT $limit";
+    }
+
     $stmt = $pdo->prepare(
-        "SELECT uid, x_percent, y_percent, display_name, message, drawing, color, shape, created_at
+        'SELECT ' . mark_select_fields($include_drawing) . "
         FROM marks
         ORDER BY created_at ASC, id ASC
-        LIMIT $limit"
+        $limit_clause"
     );
     $stmt->execute();
 

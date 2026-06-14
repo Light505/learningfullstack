@@ -32,15 +32,17 @@ try {
 
     for ($attempt = 0; $attempt < 30 && connection_status() === CONNECTION_NORMAL; $attempt += 1) {
         $count = count_marks($pdo);
-        $recent = recent_marks($pdo, 10);
-        $uids = mark_uids($pdo);
-        $signature = hash('sha256', json_encode([$count, $recent, $uids]));
+        $recent = recent_marks($pdo, 10, false);
+        $marks = all_marks($pdo, null, false);
+        $uids = mark_uids($pdo, null);
+        $signature = hash('sha256', json_encode([$count, $marks, $recent, $uids]));
 
         if ($signature !== $last_signature) {
             send_mark_event('marks.sync', [
                 'ok' => true,
                 'count' => $count,
-                'marks' => $recent,
+                'marks' => $marks,
+                'recent_marks' => $recent,
                 'mark_uids' => $uids,
             ]);
             $last_signature = $signature;

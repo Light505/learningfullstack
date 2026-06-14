@@ -1,8 +1,8 @@
 CREATE TABLE IF NOT EXISTS marks (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     uid CHAR(36) NOT NULL,
-    x_percent DECIMAL(5,2) NOT NULL,
-    y_percent DECIMAL(5,2) NOT NULL,
+    x_percent DECIMAL(8,2) NOT NULL,
+    y_percent DECIMAL(8,2) NOT NULL,
     display_name VARCHAR(80) NOT NULL,
     message VARCHAR(280) NULL,
     drawing LONGTEXT NULL,

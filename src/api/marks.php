@@ -17,10 +17,26 @@ try {
     $pdo = create_pdo($config);
 
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
+        $uid = trim($_GET['uid'] ?? '');
+        if ($uid !== '') {
+            try {
+                echo json_encode([
+                    'ok' => true,
+                    'mark' => find_mark_by_uid($pdo, $uid),
+                ]);
+            } catch (RuntimeException $e) {
+                http_response_code(404);
+                echo json_encode(['ok' => false, 'error' => 'Mark not found.']);
+            }
+            exit;
+        }
+
         echo json_encode([
             'ok' => true,
             'count' => count_marks($pdo),
-            'marks' => recent_marks($pdo, 10),
+            'marks' => all_marks($pdo, null, false),
+            'recent_marks' => recent_marks($pdo, 10, false),
+            'mark_uids' => mark_uids($pdo, null),
         ]);
         exit;
     }
@@ -67,7 +83,6 @@ try {
     if ($spam_error !== null) {
         throw new InvalidArgumentException($spam_error);
     }
-    assert_not_recent_duplicate($pdo, $mark_input);
 
     $mark = save_mark($pdo, $mark_input);
     record_rate_limit_attempt($pdo, client_ip(), 'mark_submit');
@@ -78,10 +93,20 @@ try {
 } catch (InvalidArgumentException $e) {
     http_response_code(422);
     echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+} catch (PDOException $e) {
+    error_log('Mark database error: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'error' => 'Error saving your mark. Please try again later.']);
 } catch (RuntimeException $e) {
-    $status = $e->getCode() === 429 ? 429 : 500;
-    http_response_code($status);
-    echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    if ($e->getCode() === 429) {
+        http_response_code(429);
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        exit;
+    }
+
+    error_log('Mark runtime error: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'error' => 'Error saving your mark. Please try again later.']);
 } catch (Throwable $e) {
     error_log('Mark save failed: ' . $e->getMessage());
     http_response_code(500);
