@@ -82,3 +82,4 @@ function validate_spam_content(array $input): ?string
 
     return null;
 }
+

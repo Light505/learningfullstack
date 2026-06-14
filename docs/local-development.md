@@ -15,25 +15,9 @@ http://localhost:8080
 http://localhost:8081
 ```
 
-The only local environment file should be `.env`. Compose loads it
-automatically, so local startup should stay:
-
-```powershell
-docker compose up -d
-```
-
-Do not pass a separate env file during normal local startup.
 Compose loads `docker-compose.override.yml` automatically for local development.
 That starts the web app, MySQL, and phpMyAdmin. Keep local secrets in `.env`,
 created from the example file.
-
-Production uses a different Compose file and should always be started from the
-web VPS with:
-
-```bash
-cd /opt/learningfullstack
-docker compose --env-file .env -f docker-compose.web.yml -f docker-compose.database.yml up -d --remove-orphans
-```
 
 ## Database
 

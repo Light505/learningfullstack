@@ -24,12 +24,6 @@ http://localhost:8081
 Docker Compose loads `docker-compose.override.yml` automatically for local
 development. That starts the web app, MySQL, and phpMyAdmin.
 
-Normal local startup should stay:
-
-```powershell
-docker compose up -d
-```
-
 ## App Behavior
 
 - Marks are saved in MySQL and loaded through `src/api/marks.php`.
@@ -38,9 +32,6 @@ docker compose up -d
   neighbors.
 - Unexplored but visible tiles are fogged and unavailable for placement.
 - Users can undo their latest mark in the current PHP session.
-
-Production uses separate VPS startup commands and starts phpMyAdmin only when
-needed with the `tools` profile. See [Deployment](docs/deployment.md).
 
 ## Checks
 

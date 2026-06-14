@@ -318,56 +318,6 @@ main                    latest pushed main image
 prod                    production image watched by Watchtower
 ```
 
-## Troubleshooting MySQL Access
-
-If adding a mark fails with:
-
-```text
-SQLSTATE[HY000] [1045] Access denied for user 'appuser'@'<web-vps-ip>'
-```
-
-the web app reached MySQL, but MySQL rejected the username, password, or source
-host.
-
-On the web VPS, check the values the app is using:
-
-```bash
-cd /opt/learningfullstack
-grep DB_ .env
-```
-
-On the database VPS, create or update the exact user for the exact web VPS IP:
-
-```bash
-sudo mysql
-```
-
-```sql
-CREATE USER IF NOT EXISTS 'appuser'@'<web-vps-ip>' IDENTIFIED BY '<db-password>';
-ALTER USER 'appuser'@'<web-vps-ip>' IDENTIFIED BY '<db-password>';
-GRANT SELECT, INSERT, UPDATE, DELETE ON mydb.* TO 'appuser'@'<web-vps-ip>';
-FLUSH PRIVILEGES;
-EXIT;
-```
-
-Then recreate the web service:
-
-```bash
-cd /opt/learningfullstack
-docker compose --env-file .env -f docker-compose.web.yml up -d --force-recreate web
-```
-
-Keep the username consistent. If the web VPS uses `DB_USER=appuser`, MySQL must
-have a user like `'appuser'@'<web-vps-ip>'`.
-
-If phpMyAdmin shows the same error while the web app works, recreate phpMyAdmin:
-
-```bash
-cd /opt/learningfullstack
-docker compose --env-file .env -f docker-compose.web.yml --profile tools up -d --force-recreate phpmyadmin
-```
-
-That refreshes phpMyAdmin's container environment from the current `.env`.
 ## Rollback
 
 Retag a known-good commit image as `prod`, push it, then let Watchtower pull it:
