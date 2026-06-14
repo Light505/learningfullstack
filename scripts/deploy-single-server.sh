@@ -36,6 +36,11 @@ require_env "$ENV_FILE" MYSQL_DATABASE >/dev/null
 require_env "$ENV_FILE" MYSQL_USER >/dev/null
 require_env "$ENV_FILE" MYSQL_PASSWORD >/dev/null
 
+single_server_db_host="$(optional_env "$ENV_FILE" DB_HOST)"
+if [ -n "$single_server_db_host" ] && [ "$single_server_db_host" != "db" ]; then
+    fail "Single-server mode uses the internal Docker database host 'db'. Remove DB_HOST from ${ENV_FILE}, or set DB_HOST=db. Current DB_HOST=${single_server_db_host}."
+fi
+
 print_ufw_web_guidance
 ghcr_login_if_requested "$ENV_FILE"
 

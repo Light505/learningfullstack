@@ -127,6 +127,10 @@ DB_USER=app_user
 DB_PASS=replace_with_strong_app_password
 ```
 
+Leave the `DB_*` values commented out or absent for single-server mode. If
+`DB_HOST` is set, the web container uses it instead of the internal Docker
+database service name `db`.
+
 If you provision the external DB with this repo's script, set this on the DB
 server:
 
