@@ -53,6 +53,17 @@ $preview_mark = [
     'created' => 'Waiting for the first mark.',
 ];
 $recent_marks = array_slice(array_reverse($marks), 0, 5);
+
+function asset_url(string $path): string
+{
+    $normalized = ltrim($path, '/');
+    $full_path = __DIR__ . '/' . $normalized;
+    $version = is_file($full_path) ? (string) filemtime($full_path) : '1';
+
+    return '/' . $normalized . '?v=' . rawurlencode($version);
+}
+
+$cave_texture_url = asset_url('assets/images/cave-wall-texture.png');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -60,12 +71,17 @@ $recent_marks = array_slice(array_reverse($marks), 0, 5);
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>I was here.</title>
-    <link rel="stylesheet" href="/assets/lib/leaflet/leaflet.css">
-    <link rel="stylesheet" href="/assets/css/home.css">
-    <script src="/assets/lib/leaflet/leaflet.js" defer></script>
-    <script src="/assets/js/canvas-prototype.js" defer></script>
+    <link rel="stylesheet" href="<?= htmlspecialchars(asset_url('assets/lib/leaflet/leaflet.css'), ENT_QUOTES, 'UTF-8') ?>">
+    <link rel="stylesheet" href="<?= htmlspecialchars(asset_url('assets/css/home.css'), ENT_QUOTES, 'UTF-8') ?>">
+    <script>
+        window.LEARNINGFULLSTACK_ASSETS = <?= json_encode([
+            'caveTexture' => $cave_texture_url,
+        ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    </script>
+    <script src="<?= htmlspecialchars(asset_url('assets/lib/leaflet/leaflet.js'), ENT_QUOTES, 'UTF-8') ?>" defer></script>
+    <script src="<?= htmlspecialchars(asset_url('assets/js/canvas-prototype.js'), ENT_QUOTES, 'UTF-8') ?>" defer></script>
 </head>
-<body>
+<body style="--cave-texture: url('<?= htmlspecialchars($cave_texture_url, ENT_QUOTES, 'UTF-8') ?>')">
     <main class="app-shell">
         <section class="workspace" aria-labelledby="page-title">
             <header class="topbar">

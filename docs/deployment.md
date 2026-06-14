@@ -310,6 +310,24 @@ docker compose --env-file .env -f docker-compose.web.yml down --remove-orphans
 Do not add `-v` unless you intentionally want to delete Traefik certificates or
 MySQL data.
 
+After pushing a new `prod` image, Watchtower checks for updates every
+`WATCHTOWER_POLL_INTERVAL` seconds. With the default `300`, the site can take up
+to about five minutes to move to the new image.
+
+Watchtower updates the `web` containers only. It does not restart Traefik or
+MySQL when only `WEB_IMAGE` changes. Traefik watches Docker events and should
+refresh its backend list automatically, but if the site looks stuck after a web
+image update, restart only Traefik first:
+
+```bash
+cd /opt/learningfullstack
+docker compose --env-file .env -f docker-compose.web.yml -f docker-compose.database.yml restart traefik
+```
+
+If one browser profile behaves differently from a private tab, clear site data
+for the domain. The app uses a sticky backend cookie so PHP sessions keep
+working across web replicas.
+
 ## Image Tags
 
 ```text

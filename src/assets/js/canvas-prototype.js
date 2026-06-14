@@ -1,4 +1,6 @@
 let marks = Array.from(document.querySelectorAll(".mark-dot"));
+const appAssets = window.LEARNINGFULLSTACK_ASSETS || {};
+const caveTextureUrl = appAssets.caveTexture || "/assets/images/cave-wall-texture.png";
 const previewChip = document.querySelector(".preview-chip");
 const previewName = document.querySelector("[data-preview-name]");
 const previewMessage = document.querySelector("[data-preview-message]");
@@ -3226,7 +3228,7 @@ function exportWorldSvg() {
 
         return [
             `<rect x="${x}" y="${y}" width="${tileSize}" height="${tileSize}" fill="#fbfaf5" stroke="#52493e" stroke-opacity="0.18" stroke-width="1" />`,
-            `<image href="/assets/images/cave-wall-texture.png" x="${x}" y="${y}" width="${tileSize}" height="${tileSize}" preserveAspectRatio="none" opacity="0.55" />`,
+            `<image href="${svgEscape(caveTextureUrl)}" x="${x}" y="${y}" width="${tileSize}" height="${tileSize}" preserveAspectRatio="none" opacity="0.55" />`,
             `<path d="M ${x} ${y} h ${tileSize} v ${tileSize} h -${tileSize} Z" fill="url(#grid)" />`,
             shade,
         ].join("");

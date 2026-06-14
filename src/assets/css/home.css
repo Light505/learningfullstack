@@ -6,6 +6,7 @@
     --panel: rgba(255, 250, 240, 0.9);
     --line: rgba(76, 63, 48, 0.18);
     --shadow: 0 18px 45px rgba(41, 32, 24, 0.16);
+    --cave-texture: url("/assets/images/cave-wall-texture.png");
 }
 
 * {
@@ -297,7 +298,7 @@ textarea:disabled {
     height: var(--canvas-world-height);
     background-color: #fbfaf5;
     background-image:
-        url("/assets/images/cave-wall-texture.png"),
+        var(--cave-texture),
         radial-gradient(circle, rgba(81, 70, 58, 0.18) 1px, transparent 1.3px),
         linear-gradient(rgba(64, 58, 50, 0.06) 1px, transparent 1px),
         linear-gradient(90deg, rgba(64, 58, 50, 0.06) 1px, transparent 1px);
@@ -590,7 +591,7 @@ textarea:disabled {
 
 .mark-canvas[data-render-mode="map"] .canvas-world {
     background-image:
-        url("/assets/images/cave-wall-texture.png"),
+        var(--cave-texture),
         radial-gradient(circle, rgba(81, 70, 58, 0.16) 1px, transparent 1.3px),
         linear-gradient(rgba(64, 58, 50, 0.045) 1px, transparent 1px),
         linear-gradient(90deg, rgba(64, 58, 50, 0.045) 1px, transparent 1px);

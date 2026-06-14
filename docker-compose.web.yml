@@ -6,6 +6,7 @@ services:
     command:
       - "--api.dashboard=false"
       - "--providers.docker=true"
+      - "--providers.docker.watch=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
@@ -32,6 +33,9 @@ services:
       - "traefik.http.routers.learningfullstack.entrypoints=websecure"
       - "traefik.http.routers.learningfullstack.tls.certresolver=letsencrypt"
       - "traefik.http.services.learningfullstack.loadbalancer.server.port=80"
+      - "traefik.http.services.learningfullstack.loadbalancer.healthcheck.path=/health.php"
+      - "traefik.http.services.learningfullstack.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.learningfullstack.loadbalancer.healthcheck.timeout=3s"
       - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie=true"
       - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie.name=learningfullstack_backend"
       - "traefik.http.services.learningfullstack.loadbalancer.sticky.cookie.secure=true"
